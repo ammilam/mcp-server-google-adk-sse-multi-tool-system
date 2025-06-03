@@ -33,14 +33,14 @@ The communication flow is:
 
 1. **Set up the MCP server**:
    ```bash
-   cd /Users/localadmin/research/mcp-server-google-adk-multi-tool-system/mcp
+   cd /mcp-server-google-adk-multi-tool-system/mcp
    npm install
    npm start
    ```
 
 2. **Set up the Google ADK agent**:
    ```bash
-   cd /Users/localadmin/research/mcp-server-google-adk-multi-tool-system
+   cd mcp-server-google-adk-multi-tool-system
    python -m pip install -e mcp_agent
    ```
 
@@ -497,7 +497,7 @@ curl -X POST http://localhost:8080/api/adk-webhook \
 Run the agent and test the image generation tool with a prompt:
 
 ```bash
-cd /Users/localadmin/research/mcp-server-google-adk-multi-tool-system
+cd /mcp-server-google-adk-multi-tool-system
 python -m mcp_agent.main
 ```
 
