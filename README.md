@@ -31,20 +31,13 @@ The communication flow is:
 
 #### Setting Up the Environment
 
-1. **Set up the MCP server**:
+1. **Set up the MCP serve and the Google ADK Agentr**:
    ```bash
-   cd mcp-server-google-adk-multi-tool-system/mcp
-   npm install
-   npm run start
+   # run this from the root directory of the project to setup the MCP server and the Google ADK agent
+   ./scripts/setup.sh
    ```
 
-2. **Set up the Google ADK agent**:
-   ```bash
-   cd mcp-server-google-adk-multi-tool-system
-   python -m pip install -e mcp_agent
-   ```
-
-3. **Configure environment variables**:
+2. **Configure environment variables**:
    - For MCP server, make sure .env contains:
      ```
      PORT=8080
@@ -58,16 +51,16 @@ The communication flow is:
      MCP_SERVER_URL=http://localhost:8080
      ```
 
-4. **Run the Google ADK agent**:
+3. **Run Everything**:
    ```bash
-   cd mcp-server-google-adk-multi-tool-system
-   google-adk web
+   # run this from the root directory of the project to start both the MCP server and the Google ADK agent
+    ./scripts/run.sh
    ```
-5. **Open the web interface and select mcp_agent**:
+4. **Open the web interface and select mcp_agent**:
    - Go to `http://localhost:8000` in browser
    - Select the `mcp_agent` from the dropdown
    - Chat with the agent to ensure it's working
-6. **Test existing tools**:
+5. **Test existing tools**:
 
 ### 3. Adding a New Tool to MCP Server
 
