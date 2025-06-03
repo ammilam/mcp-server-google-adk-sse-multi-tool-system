@@ -11,4 +11,5 @@ source venv/bin/activate
 pip install google-adk
 cd mcp_agent
 pip install -e .
+cd ..
 npm install -prefix=mcp
