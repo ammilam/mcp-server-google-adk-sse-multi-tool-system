@@ -62,11 +62,13 @@ The communication flow is:
    # run this from the root directory of the project to start the Google ADK agent (in another terminal)
    ./scripts/run-agent.sh
    ```
-4. **Open the web interface and select mcp_agent**:
+
+5. **Open the web interface and select mcp_agent**:
    - Go to `http://localhost:8000` in browser
    - Select the `mcp_agent` from the dropdown
    - Chat with the agent to ensure it's working
-5. **Test existing tools**:
+   
+6. **Test existing tools**:
 
 ### 3. Adding a New Tool to MCP Server
 

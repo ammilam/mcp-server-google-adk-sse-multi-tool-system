@@ -9,5 +9,6 @@ rm -rf venv
 python3 -m venv venv
 source venv/bin/activate
 pip install google-adk
-pip install -e ./mcp_agent
+cd mcp_agent
+pip install -e .
 npm install -prefix=mcp
