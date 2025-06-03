@@ -243,7 +243,7 @@ const apiTool = async (operation: ApiOperation): Promise<{ success: boolean; dat
 
 // Routes
 // Initialize a new session
-app.post('/api/session', (req, res) => {
+app.post('/api/session', (req: any, res: any) => {
   const sessionId = uuidv4();
   const session: Session = {
     id: sessionId,
@@ -262,7 +262,7 @@ app.post('/api/session', (req, res) => {
 });
 
 // Get all session data
-app.get('/api/session/:sessionId/data', (req, res) => {
+app.get('/api/session/:sessionId/data', (req: any, res: any) => {
   const { sessionId } = req.params;
   const session = getSessionAndUpdate(sessionId);
 
@@ -281,7 +281,7 @@ app.get('/api/session/:sessionId/data', (req, res) => {
 });
 
 // Get session info
-app.get('/api/session/:sessionId', (req, res) => {
+app.get('/api/session/:sessionId', (req: any, res: any) => {
   const { sessionId } = req.params;
   const session = getSessionAndUpdate(sessionId);
 
@@ -304,7 +304,7 @@ app.get('/api/session/:sessionId', (req, res) => {
 });
 
 // Set session data
-app.post('/api/session/:sessionId/data', (req, res) => {
+app.post('/api/session/:sessionId/data', (req: any, res: any) => {
   const { sessionId } = req.params;
   const session = getSessionAndUpdate(sessionId);
 
@@ -336,7 +336,7 @@ app.post('/api/session/:sessionId/data', (req, res) => {
 });
 
 // Get session data for a specific key
-app.get('/api/session/:sessionId/data/:key', (req, res) => {
+app.get('/api/session/:sessionId/data/:key', (req: any, res: any) => {
   const { sessionId, key } = req.params;
   const session = getSessionAndUpdate(sessionId);
 
@@ -362,7 +362,7 @@ app.get('/api/session/:sessionId/data/:key', (req, res) => {
 });
 
 // File system operations
-app.post('/api/session/:sessionId/filesystem', async (req, res) => {
+app.post('/api/session/:sessionId/filesystem', async (req: any, res: any) => {
   const { sessionId } = req.params;
   const session = getSessionAndUpdate(sessionId);
 
@@ -392,7 +392,7 @@ app.post('/api/session/:sessionId/filesystem', async (req, res) => {
 });
 
 // API operations, this endpoint allows making API calls using the MCP server
-app.post('/api/session/:sessionId/api', async (req, res) => {
+app.post('/api/session/:sessionId/api', async (req: any, res: any) => {
   const { sessionId } = req.params;
   const session = getSessionAndUpdate(sessionId);
 
@@ -422,7 +422,7 @@ app.post('/api/session/:sessionId/api', async (req, res) => {
 });
 
 // Health check endpoint
-app.get('/health', (req, res) => {
+app.get('/health', (req: any, res: any) => {
   res.status(200).json({
     status: 'ok',
     timestamp: new Date().toISOString(),
@@ -432,7 +432,7 @@ app.get('/health', (req, res) => {
 });
 
 // Add an SSE endpoint to your MCP server
-app.get('/api/sse/:sessionId', (req, res) => {
+app.get('/api/sse/:sessionId', (req: any, res: any) => {
   const { sessionId } = req.params;
   const session = getSessionAndUpdate(sessionId);
 
@@ -452,7 +452,7 @@ app.get('/api/sse/:sessionId', (req, res) => {
   res.write(`data: ${JSON.stringify({ type: 'connection', status: 'established', sessionId })}\n\n`);
 
   // Create a listener function for this client
-  const listener = (eventData) => {
+  const listener = (eventData: any) => {
     if (eventData.sessionId === sessionId) {
       res.write(`data: ${JSON.stringify(eventData)}\n\n`);
     }
@@ -478,7 +478,7 @@ function emitEvent(sessionId: string, eventType: string, data: any) {
   });
 }
 
-app.post('/api/adk-webhook', express.json({ limit: '50mb' }), async (req, res) => {
+app.post('/api/adk-webhook', express.json({ limit: '50mb' }), async (req: any, res: any) => {
   try {
     console.log('Received webhook request from Google ADK');
 
@@ -684,7 +684,7 @@ async function handleWeatherTool(parameters: any, sessionId: string) {
 }
 
 // API Help documentation endpoint
-app.get('/api/help', (req, res) => {
+app.get('/api/help', (req: any, res: any) => {
   const baseUrl = `${req.protocol}://${req.get('host')}`;
 
   const helpDocs = {
@@ -1088,7 +1088,7 @@ function generateHtmlDocs(docs: any): string {
     <p><strong>Base URL:</strong> ${docs.baseUrl}</p>
     
     <h2>Endpoints</h2>
-    ${docs.endpoints.map(endpoint => `
+    ${docs.endpoints.map((endpoint: any) => `
       <div class="endpoint">
         <div>
           <span class="method ${endpoint.method.toLowerCase()}">${endpoint.method}</span>
@@ -1108,7 +1108,7 @@ function generateHtmlDocs(docs: any): string {
               </tr>
             </thead>
             <tbody>
-              ${endpoint.parameters.map(param => `
+              ${endpoint.parameters.map((param: any) => `
                 <tr>
                   <td>${param.name}</td>
                   <td>${param.in}</td>
@@ -1161,13 +1161,13 @@ function generateHtmlDocs(docs: any): string {
     `).join('')}
     
     <h2>Common Workflows</h2>
-    ${docs.workflows.map(workflow => `
+    ${docs.workflows.map((workflow: any) => `
       <div class="workflow">
         <h3>${workflow.name}</h3>
         <p>${workflow.description}</p>
         
         <div class="workflow-steps">
-          ${workflow.steps.map(step => `
+          ${workflow.steps.map((step: any) => `
             <div class="workflow-step">
               <p>${step.description}</p>
               <pre><code>${step.command}</code></pre>

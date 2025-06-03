@@ -2,9 +2,10 @@
   "name": "mcp",
   "version": "1.0.0",
   "main": "index.js",
+  "type": "module",
   "scripts": {
     "build": "tsc",
-    "start": "node app.ts",
+    "start": "NODE_OPTIONS=\"--loader ts-node/esm\" node app.ts",
     "dev": "ts-node-dev --respawn --transpile-only app.ts",
     "test": "jest"
   },
@@ -17,7 +18,13 @@
     "cors": "^2.8.5",
     "express": "^5.1.0",
     "morgan": "^1.10.0",
+    "ts-node": "^10.9.2",
     "typescript": "^5.8.3",
     "uuid": "^11.1.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.18",
+    "@types/express": "^5.0.2",
+    "@types/morgan": "^1.9.9"
   }
 }
