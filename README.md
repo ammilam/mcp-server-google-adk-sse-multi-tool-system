@@ -51,10 +51,16 @@ The communication flow is:
      MCP_SERVER_URL=http://localhost:8080
      ```
 
-3. **Run Everything**:
+3. **Run MCP Server**:
    ```bash
    # run this from the root directory of the project to start both the MCP server and the Google ADK agent
-    ./scripts/run.sh
+    ./scripts/run-mcp.sh
+   ```
+
+4. **Run Google ADK Agent**:
+   ```bash
+   # run this from the root directory of the project to start the Google ADK agent (in another terminal)
+   ./scripts/run-agent.sh
    ```
 4. **Open the web interface and select mcp_agent**:
    - Go to `http://localhost:8000` in browser
