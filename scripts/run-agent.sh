@@ -2,4 +2,4 @@
 
 set -e
 
-./venv/bin/adk web
+google-adk web
