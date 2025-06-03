@@ -35,7 +35,7 @@ The communication flow is:
    ```bash
    cd mcp-server-google-adk-multi-tool-system/mcp
    npm install
-   npm start
+   npm run start
    ```
 
 2. **Set up the Google ADK agent**:
