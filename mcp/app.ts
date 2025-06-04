@@ -148,92 +148,48 @@ const fileSystemTool = async (operation: FileOperation): Promise<{ success: bool
   }
 };
 
-
-
-// Mock API tool implementation
+// API tool implementation that makes HTTP requests
 const apiTool = async (operation: ApiOperation): Promise<{ success: boolean; data?: any; error?: string }> => {
   try {
     const { endpoint, method, data, headers, access_token, content_type } = operation;
-  // live fetch based off of what the user has requested
   
     if (!endpoint || !method) {
       return { success: false, error: 'Endpoint and method are required' };
     }
 
-    console.log(`Making API call to ${endpoint} with method ${method}`);
-    const response = await axios({
-      method,
-      url: `https://api.example.com/${endpoint}`, // Replace with actual base URL
-      data,
-      headers: {
-        ...headers,
-        'Content-Type': content_type || 'application/json',
-        ...(access_token ? { Authorization: `Bearer ${access_token}` } : {})
-      }
-    });
-
-    if (response.status !== 200) {
-      return {
-        success: false,
-        error: `API call failed with status ${response.status}: ${response.statusText}`
-      };
+    // Ensure the URL has a protocol
+    let url = endpoint;
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      url = 'http://' + url;
     }
 
-    return {
-      success: true,
-      data: response.data
-    };
-    // Mock API responses for demonstration purposes
-    // You can replace this with actual API calls using axios or any other HTTP client
-    // For now, just mock responses based on the endpoint
-    // if (operation.endpoint === 'hello') {
-    //   return {
-    //     success: true,
-    //     data: {
-    //       message: 'Hello, world!',
-    //       timestamp: new Date().toISOString()
-    //     }
-    //   };
-    // }
-
-    // if (operation.endpoint === 'echo') {
-    //   return {
-    //     success: true,
-    //     data: operation.data || {}
-    //   };
-    // }
-
-    // Mock error case for testing
-    // if (operation.endpoint === 'error') {
-    //   return {
-    //     success: false,
-    //     error: 'Simulated API error'
-    //   };
-    // }
-
-    // This commented section can be uncommented when ready to replace with real API calls
-    /*
-    const url = `https://api.example.com/${operation.endpoint}`;
-    const response = await axios({
-      method: operation.method,
+    console.log(`Making API call to ${url} with method ${method}`);
+    
+    // Create request config
+    const requestConfig: any = {
+      method,
       url,
-      data: operation.data,
-      headers: operation.headers
-    });
-    
+      headers: {
+        'Content-Type': content_type || 'application/json',
+        ...(headers || {}),
+        ...(access_token ? { Authorization: `Bearer ${access_token}` } : {})
+      }
+    };
+
+    // Only add data if it's provided and not for GET requests
+    if (data && method.toUpperCase() !== 'GET') {
+      requestConfig.data = data;
+    }
+
+    const response = await axios(requestConfig);
+
+    // Check if the response has any data before returning
     return {
       success: true,
-      data: response.data
+      data: response.data || null
     };
-    */
-
-    return {
-      success: false,
-      error: `Unknown endpoint: ${operation.endpoint}`
-    };
-    
   } catch (error: any) {
-    console.error(`API error:`, error);
+    console.error(`API error:`, error.message || error);
     return {
       success: false,
       error: error.message || 'Unknown API error'
@@ -603,13 +559,16 @@ async function handleApiTool(parameters: any, sessionId: string) {
     };
   }
 
+  // Log the API call for debugging
+  console.log(`Processing API request: ${parameters.method} ${parameters.endpoint}`);
+  
   const operation: ApiOperation = {
     endpoint: parameters.endpoint,
-    method: parameters.method,
-    data: parameters.data,
-    headers: parameters.headers,
-    access_token: parameters.access_token, // Optional access token for authenticated APIs,
-    content_type: parameters.content_type || 'application/json' // Default to application/json
+    method: parameters.method.toUpperCase(), // Normalize method to uppercase
+    data: parameters.data || null,
+    headers: parameters.headers || {},
+    access_token: parameters.access_token || null,
+    content_type: parameters.content_type || 'application/json'
   };
 
   return await apiTool(operation);

@@ -14,8 +14,6 @@ from .tools import (
     mcp_retrieve_data
 )
 
-
-# Make sure to update the tools list:
 agent = Agent(
     name="mcp_agent",
     model="gemini-2.0-flash",
@@ -31,10 +29,15 @@ I can:
 When you ask me about files, I'll use the appropriate file operation tools.
 When you ask me about weather, I'll look up the latest conditions.
 When you want to store information for later, I'll use session storage.
+
+For API calls:
+- I'll need a complete URL (e.g., "api.example.com/endpoint" or "http://api.example.com/endpoint")
+- I need to know which HTTP method to use (GET, POST, PUT, DELETE)
+- For POST/PUT requests, I'll need the data to send
+- I'll always ask you to confirm details before making potentially sensitive API calls
 """,
     tools=[
-
-        # MCP file system tools
+        # Tools remain the same
         mcp_read_file,
         mcp_write_file,
         mcp_list_files,

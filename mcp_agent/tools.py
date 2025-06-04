@@ -128,19 +128,34 @@ def mcp_delete_file(file_path: str) -> dict:
         }
 
 # API Tools
-def mcp_call_api(endpoint: str, method: str, data: Optional[Dict[str, Any]] = None) -> dict:
+def mcp_call_api(endpoint: str, method: str, data: Optional[Dict[str, Any]] = None, 
+                headers: Optional[Dict[str, Any]] = None) -> dict:
     """Makes an API call through the MCP server.
     
     Args:
-        endpoint: The API endpoint to call
+        endpoint: The URL to call (with or without http:// prefix)
         method: HTTP method (GET, POST, PUT, DELETE)
         data: Optional data to send with the request
+        headers: Optional headers to include in the request
         
     Returns:
         dict: A dictionary with status ('success' or 'error') and response data or error message
     """
     try:
-        result = mcp_toolkit.call_api(endpoint, method, data)
+        # Ensure method is uppercase
+        method = method.upper() if method else "GET"
+        
+        # Validate endpoint has protocol
+        if endpoint and not (endpoint.startswith('http://') or endpoint.startswith('https://')):
+            endpoint = 'http://' + endpoint
+            
+        logger.info(f"Making API call to {endpoint} with method {method}")
+        
+        # Don't send data for GET requests
+        if method == "GET":
+            data = None
+            
+        result = mcp_toolkit.call_api(endpoint, method, data, headers)
         
         if result.get("success"):
             return {
