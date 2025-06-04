@@ -3,4 +3,4 @@
 set -e
 
 # Start the MCP server
-npm run start -prefix=mcp
+npm run start -prefix mcp

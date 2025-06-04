@@ -34,7 +34,7 @@ type ApiOperation = {
 
 // Create Express app
 const app: express.Application = express();
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 9000;
 const MAX_EVENT_LISTENERS: number = process.env.MAX_EVENT_LISTENERS ? parseInt(process.env.MAX_EVENT_LISTENERS) : 100;
 
 // Create a global event emitter for SSE

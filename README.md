@@ -48,7 +48,7 @@ The communication flow is:
      GOOGLE_CLOUD_PROJECT="your-google-project-id"
      GOOGLE_CLOUD_LOCATION="us-central1"
      GOOGLE_GENAI_USE_VERTEXAI="True"
-     MCP_SERVER_URL=http://localhost:8080
+     MCP_SERVER_URL=http://localhost:9000
      ```
 
 3. **Run MCP Server**:
@@ -60,7 +60,7 @@ The communication flow is:
 4. **Run Google ADK Agent**:
    ```bash
    # run this from the root directory of the project to start the Google ADK agent (in another terminal)
-   ./scripts/run-agent.sh
+   adk web
    ```
 
 5. **Open the web interface and select mcp_agent**:
