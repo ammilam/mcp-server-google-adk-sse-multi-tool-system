@@ -35,6 +35,8 @@ def main():
         print("  - Work with files (read, write, list, delete)")
         print("  - Store and retrieve session data")
         print("  - Make API calls through the MCP server")
+        print("  - Clone and analyze repositories from GitHub or GitLab")
+        print("  - Generate documentation for code repositories")
         print("\nExample commands:")
         print("  - What's the weather in London?")
         print("  - What time is it in New York?")
@@ -44,6 +46,9 @@ def main():
         print("  - Store my name as John")
         print("  - What is my name?")
         print("  - Call the hello API")
+        print("  - Clone the repository at github.com/username/repo")
+        print("  - Analyze the code from the repository I just cloned")
+        print("  - Generate a README for this repository")
         print("\nType 'exit' to quit")
         print("="*50 + "\n")
         

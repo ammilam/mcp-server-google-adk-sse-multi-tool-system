@@ -174,6 +174,152 @@ def mcp_call_api(endpoint: str, method: str, data: Optional[Dict[str, Any]] = No
             "error_message": f"Exception: {str(e)}"
         }
 
+# Repository Tools
+def mcp_clone_repository(url: str) -> dict:
+    """Clones a GitHub or GitLab repository.
+    
+    Args:
+        url: Repository URL (GitHub or GitLab)
+        
+    Returns:
+        dict: A dictionary with status and either repository path or error message
+    """
+    try:
+        logger.info(f"Cloning repository from {url}")
+        
+        result = mcp_toolkit.execute_tool("repository", {
+            "operation": "clone",
+            "url": url
+        })
+        
+        if result.get("success"):
+            return {
+                "status": "success",
+                "repo_path": result.get("data", {}).get("path"),
+                "message": result.get("data", {}).get("message", "Repository cloned successfully")
+            }
+        else:
+            error_msg = result.get("error", "Unknown error cloning repository")
+            return {
+                "status": "error",
+                "error_message": error_msg
+            }
+    except Exception as e:
+        logger.error(f"Error in mcp_clone_repository: {str(e)}")
+        return {
+            "status": "error",
+            "error_message": f"Exception: {str(e)}"
+        }
+
+def mcp_list_repositories() -> dict:
+    """Lists available repositories.
+    
+    Returns:
+        dict: A dictionary with status and list of repositories
+    """
+    try:
+        result = mcp_toolkit.execute_tool("repository", {
+            "operation": "list"
+        })
+        
+        if result.get("success"):
+            return {
+                "status": "success",
+                "repositories": result.get("data", [])
+            }
+        else:
+            return {
+                "status": "error",
+                "error_message": result.get("error", "Unknown error listing repositories")
+            }
+    except Exception as e:
+        logger.error(f"Error in mcp_list_repositories: {str(e)}")
+        return {
+            "status": "error",
+            "error_message": f"Exception: {str(e)}"
+        }
+
+def mcp_analyze_repository(repo_path: str) -> dict:
+    """Analyzes a repository and provides information about its structure and contents.
+    
+    Args:
+        repo_path: Path to the repository (should be the name or relative path within the repos directory)
+        
+    Returns:
+        dict: A dictionary with status and repository analysis information
+    """
+    try:
+        # Remove any leading slashes to ensure we're using relative paths
+        clean_path = repo_path.lstrip('/')
+        if clean_path.startswith('data/repos/'):
+            # Remove the data/repos prefix if it's already there
+            clean_path = clean_path.replace('data/repos/', '', 1)
+        
+        logger.info(f"Analyzing repository at path: {clean_path}")
+        
+        result = mcp_toolkit.execute_tool("repository", {
+            "operation": "analyze",
+            "path": clean_path
+        })
+        
+        if result.get("success"):
+            return {
+                "status": "success",
+                "analysis": result.get("data", {})
+            }
+        else:
+            return {
+                "status": "error",
+                "error_message": result.get("error", "Unknown error analyzing repository")
+            }
+    except Exception as e:
+        logger.error(f"Error in mcp_analyze_repository: {str(e)}")
+        return {
+            "status": "error",
+            "error_message": f"Exception: {str(e)}"
+        }
+
+def mcp_generate_readme(repo_path: str) -> dict:
+    """Generates a README document for a repository.
+    
+    Args:
+        repo_path: Path to the repository (should be the name or relative path within the repos directory)
+        
+    Returns:
+        dict: A dictionary with status and generated README content
+    """
+    try:
+        # Remove any leading slashes to ensure we're using relative paths
+        clean_path = repo_path.lstrip('/')
+        if clean_path.startswith('data/repos/'):
+            # Remove the data/repos prefix if it's already there
+            clean_path = clean_path.replace('data/repos/', '', 1)
+        
+        logger.info(f"Generating README for repository at path: {clean_path}")
+        
+        result = mcp_toolkit.execute_tool("repository", {
+            "operation": "generate_readme",
+            "path": clean_path
+        })
+        
+        if result.get("success"):
+            return {
+                "status": "success",
+                "readme_path": result.get("data", {}).get("path"),
+                "content": result.get("data", {}).get("content")
+            }
+        else:
+            return {
+                "status": "error",
+                "error_message": result.get("error", "Unknown error generating README")
+            }
+    except Exception as e:
+        logger.error(f"Error in mcp_generate_readme: {str(e)}")
+        return {
+            "status": "error",
+            "error_message": f"Exception: {str(e)}"
+        }
+    
 # Weather Tool
 def mcp_get_weather(location: str) -> dict:
     """Gets weather information for a specified location.

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "start": "NODE_OPTIONS=\"--loader ts-node/esm\" node app.ts",
+    "start": "node --loader ts-node/esm app.ts",
     "dev": "ts-node-dev --respawn --transpile-only app.ts",
     "test": "jest"
   },
@@ -25,6 +25,7 @@
   "devDependencies": {
     "@types/cors": "^2.8.18",
     "@types/express": "^5.0.2",
-    "@types/morgan": "^1.9.9"
+    "@types/morgan": "^1.9.9",
+    "@types/node": "^22.15.29"
   }
 }

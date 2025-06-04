@@ -1,7 +1,8 @@
 import express from 'express';
 import fs from 'fs/promises';
-import path from 'path';
+import path from 'path'; // Rename this import
 import { v4 as uuidv4 } from 'uuid';
+
 import axios from 'axios';
 import morgan from 'morgan';
 import cors from 'cors';
@@ -30,6 +31,14 @@ type ApiOperation = {
   headers?: Record<string, string>;
   access_token?: string; // Optional access token for authenticated APIs
   content_type?: string; // Optional content type for the request, default is application/json
+};
+
+type RepoOperation = {
+  operation: 'clone' | 'list' | 'analyze' | 'generate_readme';
+  url?: string;
+  repoPath?: string; // Renamed from 'path' to avoid conflict
+  access_token?: string;
+  options?: Record<string, any>;
 };
 
 // Create Express app
@@ -101,6 +110,483 @@ const getWeatherTool = async (location: string): Promise<{ success: boolean; dat
   }
 };
 
+async function handleRepoTool(parameters: any, sessionId: string) {
+  const operation = parameters.operation;
+
+  if (!operation) {
+    return {
+      success: false,
+      error: 'Invalid repository operation request. Required parameter: operation'
+    };
+  }
+
+  console.log(`Processing repository operation: ${operation}`);
+
+  const repoOperation: RepoOperation = {
+    operation: operation,
+    url: parameters.url,
+    repoPath: parameters.path, // Map the incoming 'path' parameter to our renamed 'repoPath' property
+    access_token: parameters.access_token,
+    options: parameters.options || {}
+  };
+
+  return await repoTool(repoOperation);
+}
+
+// This function creates a dedicated path resolver for repositories
+const getRepositoryPathResolver = () => {
+  // Set the base directory for repositories
+  const baseDir = process.env.REPO_DIR || './data/repos';
+  let baseDirCreated = false;
+
+  const ensureBaseDir = async () => {
+    if (!baseDirCreated) {
+      try {
+        await fs.mkdir(baseDir, { recursive: true });
+        console.log(`Ensuring repository base directory exists: ${baseDir}`);
+        baseDirCreated = true;
+      } catch (err) {
+        console.error(`Error creating repository base directory: ${err}`);
+      }
+    }
+  };
+
+  // Function to resolve a repository path given a URL
+  const getRepoPathFromUrl = async (repoUrl: string) => {
+    await ensureBaseDir();
+    // Extract repo name from URL
+    const urlParts = repoUrl.split('/');
+    const repoName = urlParts[urlParts.length - 1].replace('.git', '') ||
+      `repo-${createHash('md5').update(repoUrl).digest('hex').substring(0, 8)}`;
+    return path.resolve(baseDir, repoName);
+  };
+
+  // Function to resolve a repository path given a relative path
+  const resolveRepoPath = async (repoPath: string) => {
+    await ensureBaseDir();
+    if (path.isAbsolute(repoPath)) {
+      return repoPath;
+    }
+    // Always resolve directly to the base directory, not through validatePath
+    return path.resolve(baseDir, repoPath);
+  };
+
+  // Return both functions
+  return {
+    getRepoPathFromUrl,
+    resolveRepoPath,
+    getBaseDir: () => baseDir
+  };
+};
+
+// Create the repository path resolver
+const repoPathResolver = getRepositoryPathResolver();
+
+
+const repoTool = async (operation: RepoOperation): Promise<{ success: boolean; data?: any; error?: string }> => {
+  try {
+    const { operation: op, url, repoPath, access_token, options } = operation;
+
+    // Use the repository path resolver to handle paths consistently
+    const baseDir = repoPathResolver.getBaseDir();
+
+    switch (op) {
+      case 'clone': {
+        if (!url) {
+          return { success: false, error: 'Repository URL is required for clone operation' };
+        }
+
+        // Use the specialized function to get the repository path
+        const repoPathValue = await repoPathResolver.getRepoPathFromUrl(url);
+        console.log(`Cloning repository from ${url} to ${repoPathValue}`);
+
+        // Check if the directory already exists
+        try {
+          const stats = await fs.stat(repoPathValue);
+          if (stats.isDirectory()) {
+            // Directory exists, pull latest changes instead of cloning
+            console.log(`Repository already exists at ${repoPathValue}, pulling latest changes`);
+
+            // Use child_process to execute git commands
+            const { execSync } = await import('child_process');
+
+            // Change to the repository directory and pull
+            const gitCommand = `cd "${repoPathValue}" && git pull`;
+            const result = execSync(gitCommand, { encoding: 'utf8' });
+
+            return {
+              success: true,
+              data: {
+                message: 'Repository updated successfully',
+                path: repoPathValue,
+                output: result
+              }
+            };
+          }
+        } catch (err) {
+          // Directory doesn't exist, proceed with clone
+        }
+
+        // Prepare git clone command
+        let cloneUrl = url;
+        let token = access_token;
+
+        // Try to use environment variables if no access token was provided
+        if (!token) {
+          if (url.includes('github.com')) {
+            token = process.env.GITHUB_ACCESS_TOKEN;
+          } else if (url.includes('gitlab.com')) {
+            token = process.env.GITLAB_ACCESS_TOKEN;
+          }
+        }
+
+        if (token) {
+          // Insert access token into URL for GitHub/GitLab
+          if (url.startsWith('https://github.com/')) {
+            cloneUrl = url.replace('https://', `https://${token}@`);
+          } else if (url.startsWith('https://gitlab.com/')) {
+            cloneUrl = url.replace('https://', `https://oauth2:${token}@`);
+          }
+        }
+
+        try {
+          // Use child_process to execute git commands
+          const { execSync } = await import('child_process');
+          const gitCommand = `git clone ${cloneUrl} "${repoPathValue}"`;
+          const result = execSync(gitCommand, { encoding: 'utf8' });
+
+          return {
+            success: true,
+            data: {
+              message: 'Repository cloned successfully',
+              path: repoPathValue
+            }
+          };
+        } catch (error: any) {
+          let errorMessage = error.message || 'Unknown error cloning repository';
+
+          // Check for authentication failures
+          if (errorMessage.includes('Authentication failed') || errorMessage.includes('could not read Username')) {
+            if (!token) {
+              return {
+                success: false,
+                error: `Authentication failed. This appears to be a private repository. Please set the appropriate environment variable (GITHUB_ACCESS_TOKEN or GITLAB_ACCESS_TOKEN) to provide authentication.`
+              };
+            } else {
+              return {
+                success: false,
+                error: `Authentication failed. The provided access token appears to be invalid or has insufficient permissions.`
+              };
+            }
+          }
+
+          return {
+            success: false,
+            error: errorMessage
+          };
+        }
+      }
+
+      case 'list': {
+        // If a path was provided, resolve it properly, otherwise use the base directory
+        const dirPath = repoPath
+          ? await repoPathResolver.resolveRepoPath(repoPath)
+          : baseDir;
+
+        console.log(`Listing repositories in ${dirPath}`);
+
+        const files = await fs.readdir(dirPath);
+        const repos = [];
+
+        for (const file of files) {
+          const fullPath = path.join(dirPath, file);
+          try {
+            const stats = await fs.stat(fullPath);
+            if (stats.isDirectory()) {
+              // Check if it's a git repository
+              try {
+                const gitDirPath = path.join(fullPath, '.git');
+                await fs.stat(gitDirPath);
+
+                // It's a git repository
+                const { execSync } = await import('child_process');
+
+                // Get remote URL
+                const remoteCmd = `cd "${fullPath}" && git config --get remote.origin.url`;
+                const remoteUrl = execSync(remoteCmd, { encoding: 'utf8' }).trim();
+
+                // Get current branch
+                const branchCmd = `cd "${fullPath}" && git branch --show-current`;
+                const branch = execSync(branchCmd, { encoding: 'utf8' }).trim();
+
+                // Get last commit
+                const commitCmd = `cd "${fullPath}" && git log -1 --format="%h - %s (%cr)"`;
+                const lastCommit = execSync(commitCmd, { encoding: 'utf8' }).trim();
+
+                repos.push({
+                  name: file,
+                  path: fullPath,
+                  remote: remoteUrl,
+                  branch,
+                  lastCommit
+                });
+              } catch (err) {
+                // Not a git repository, just add the directory
+                repos.push({
+                  name: file,
+                  path: fullPath,
+                  isGitRepo: false
+                });
+              }
+            }
+          } catch (err) {
+            console.error(`Error processing ${fullPath}:`, err);
+          }
+        }
+
+        return {
+          success: true,
+          data: repos
+        };
+      }
+
+      case 'analyze': {
+        if (!repoPath) {
+          return { success: false, error: 'Repository path is required for analyze operation' };
+        }
+
+        // Use the specialized path resolver for repository paths
+        const repoPathValue = await repoPathResolver.resolveRepoPath(repoPath);
+        console.log(`Analyzing repository at ${repoPathValue}`);
+
+        try {
+          // Check if directory exists and is a git repository
+          try {
+            await fs.stat(path.join(repoPathValue, '.git'));
+          } catch (err) {
+            return { success: false, error: `Path is not a valid git repository: ${repoPathValue}` };
+          }
+
+          // Use child_process to execute commands
+          const { execSync } = await import('child_process');
+
+          // Get basic repo info
+          const remoteCmd = `cd "${repoPathValue}" && git config --get remote.origin.url`;
+          let remoteUrl = '';
+          try {
+            remoteUrl = execSync(remoteCmd, { encoding: 'utf8' }).trim();
+          } catch (err) {
+            console.log('Could not get remote URL, using local path instead');
+            remoteUrl = repoPathValue;
+          }
+
+          const branchCmd = `cd "${repoPathValue}" && git branch --show-current`;
+          let branch = '';
+          try {
+            branch = execSync(branchCmd, { encoding: 'utf8' }).trim();
+          } catch (err) {
+            console.log('Could not get current branch');
+            branch = 'unknown';
+          }
+
+          // Get file list using Node.js instead of the find command
+          console.log('Getting file list using Node.js fs.readdir');
+
+          // Create a recursive function to get all files
+          const getAllFiles = async (dirPath: string, arrayOfFiles: string[] = []) => {
+            const files = await fs.readdir(dirPath);
+
+            for (const file of files) {
+              if (file === 'node_modules' || file === '.git') continue;
+
+              const fullPath = path.join(dirPath, file);
+              try {
+                const stat = await fs.stat(fullPath);
+
+                if (stat.isDirectory()) {
+                  arrayOfFiles = await getAllFiles(fullPath, arrayOfFiles);
+                } else {
+                  arrayOfFiles.push(fullPath);
+                }
+              } catch (err) {
+                console.error(`Error processing ${fullPath}:`, err);
+              }
+            }
+
+            return arrayOfFiles;
+          }
+
+          console.log(`Starting file scan in ${repoPathValue}`);
+          const files = await getAllFiles(repoPathValue);
+          console.log(`Found ${files.length} files`);
+
+          const fileTypes: Record<string, number> = {};
+          const fileContents: Record<string, string> = {};
+
+          for (const file of files) {
+            if (!file) continue;
+
+            const extension = path.extname(file) || 'no-extension';
+            fileTypes[extension] = (fileTypes[extension] || 0) + 1;
+
+            // Analyze important files
+            const fileName = path.basename(file).toLowerCase();
+            if (
+              fileName === 'readme.md' ||
+              fileName === 'package.json' ||
+              fileName === 'requirements.txt' ||
+              fileName === 'setup.py' ||
+              fileName === 'go.mod' ||
+              fileName === 'cargo.toml' ||
+              fileName === 'build.gradle' ||
+              fileName === 'pom.xml' ||
+              fileName.includes('dockerfile')
+            ) {
+              try {
+                const content = await fs.readFile(file, 'utf-8');
+                fileContents[path.relative(repoPathValue, file)] = content;
+              } catch (err) {
+                console.error(`Error reading ${file}:`, err);
+              }
+            }
+          }
+
+          // Get directory structure using Node.js fs instead of find
+          const getDirectories = async (dirPath: string, relativeTo: string, arrayOfDirs: string[] = []) => {
+            const entries = await fs.readdir(dirPath, { withFileTypes: true });
+
+            for (const entry of entries) {
+              if (entry.name === 'node_modules' || entry.name === '.git') continue;
+
+              if (entry.isDirectory()) {
+                const fullPath = path.join(dirPath, entry.name);
+                const relativePath = path.relative(relativeTo, fullPath);
+                arrayOfDirs.push(relativePath);
+                arrayOfDirs = await getDirectories(fullPath, relativeTo, arrayOfDirs);
+              }
+            }
+
+            return arrayOfDirs;
+          }
+
+          console.log(`Getting directories in ${repoPathValue}`);
+          const directories = await getDirectories(repoPathValue, repoPathValue);
+          console.log(`Found ${directories.length} directories`);
+
+          // Count total lines of code
+          let totalLines = 0;
+          for (const file of files) {
+            try {
+              const content = await fs.readFile(file, 'utf-8');
+              const lines = content.split('\n').length;
+              totalLines += lines;
+            } catch (err) {
+              console.error(`Error counting lines in ${file}:`, err);
+            }
+          }
+
+          return {
+            success: true,
+            data: {
+              repoUrl: remoteUrl,
+              branch,
+              fileCount: files.length,
+              fileTypes,
+              directories,
+              totalLines,
+              importantFiles: fileContents
+            }
+          };
+        } catch (error: any) {
+          console.error(`Error analyzing repository:`, error);
+          return {
+            success: false,
+            error: error.message || 'Unknown error analyzing repository'
+          };
+        }
+      }
+
+      case 'generate_readme': {
+        if (!repoPath) {
+          return { success: false, error: 'Repository path is required for generate_readme operation' };
+        }
+
+        // Use the specialized path resolver for repository paths
+        const repoPathValue = await repoPathResolver.resolveRepoPath(repoPath);
+        console.log(`Generating README for repository at ${repoPathValue}`);
+
+        // First do an analysis to get repository data
+        const analysis = await repoTool({
+          operation: 'analyze',
+          repoPath // Pass the original repoPath to maintain consistency
+        });
+
+        if (!analysis.success) {
+          return analysis;
+        }
+
+        // Generate a basic README template based on the analysis
+        const repoData = analysis.data;
+        const repoUrl = repoData.repoUrl;
+        const repoName = repoUrl.split('/').pop().replace('.git', '');
+
+        const readmeContent = `# ${repoName}
+
+## Overview
+This repository was automatically analyzed with the MCP Repository Tool.
+
+## Repository Information
+- Repository URL: ${repoUrl}
+- Current Branch: ${repoData.branch}
+- Total Files: ${repoData.fileCount}
+- Total Lines of Code: ${repoData.totalLines}
+
+## File Structure
+${repoData.directories.slice(0, 20).map((dir: any) => `- ${dir}`).join('\n')}
+${repoData.directories.length > 20 ? `\n...and ${repoData.directories.length - 20} more directories` : ''}
+
+## File Types
+${Object.entries(repoData.fileTypes).map(([ext, count]) => `- ${ext}: ${count} files`).join('\n')}
+
+## Dependencies
+${repoData.importantFiles['package.json'] ? '### Node.js\n```json\n' +
+            JSON.stringify(JSON.parse(repoData.importantFiles['package.json']).dependencies || {}, null, 2) + '\n```' : ''}
+${repoData.importantFiles['requirements.txt'] ? '### Python\n```\n' + repoData.importantFiles['requirements.txt'] + '\n```' : ''}
+
+## Getting Started
+This section should be customized based on the project requirements.
+
+## License
+Please check the repository for license information.
+`;
+
+        // Write README.md in the repository
+        const readmePath = path.join(repoPathValue, 'MCP-GENERATED-README.md');
+        await fs.writeFile(readmePath, readmeContent, 'utf-8');
+
+        return {
+          success: true,
+          data: {
+            message: 'README generated successfully',
+            path: readmePath,
+            content: readmeContent
+          }
+        };
+      }
+
+      default:
+        return { success: false, error: 'Unsupported repository operation' };
+    }
+  } catch (error: any) {
+    console.error(`Repository tool error:`, error);
+    return {
+      success: false,
+      error: error.message || 'Unknown repository operation error'
+    };
+  }
+};
+
+
 // File system tool implementation that handles basic file operations
 const fileSystemTool = async (operation: FileOperation): Promise<{ success: boolean; data?: any; error?: string }> => {
   try {
@@ -152,7 +638,7 @@ const fileSystemTool = async (operation: FileOperation): Promise<{ success: bool
 const apiTool = async (operation: ApiOperation): Promise<{ success: boolean; data?: any; error?: string }> => {
   try {
     const { endpoint, method, data, headers, access_token, content_type } = operation;
-  
+
     if (!endpoint || !method) {
       return { success: false, error: 'Endpoint and method are required' };
     }
@@ -164,7 +650,7 @@ const apiTool = async (operation: ApiOperation): Promise<{ success: boolean; dat
     }
 
     console.log(`Making API call to ${url} with method ${method}`);
-    
+
     // Create request config
     const requestConfig: any = {
       method,
@@ -481,7 +967,10 @@ app.post('/api/adk-webhook', express.json({ limit: '50mb' }), async (req: any, r
       case 'weather':
         result = await handleWeatherTool(parameters, mcpSessionId);
         break;
-        // Add more cases here for additional tools
+      case 'repository':
+        result = await handleRepoTool(parameters, mcpSessionId);
+        break;
+      // Add more cases here for additional tools
       default:
         result = {
           success: false,
@@ -561,7 +1050,7 @@ async function handleApiTool(parameters: any, sessionId: string) {
 
   // Log the API call for debugging
   console.log(`Processing API request: ${parameters.method} ${parameters.endpoint}`);
-  
+
   const operation: ApiOperation = {
     endpoint: parameters.endpoint,
     method: parameters.method.toUpperCase(), // Normalize method to uppercase
@@ -836,47 +1325,72 @@ app.get('/api/help', (req: any, res: any) => {
           }
         ],
         requestBodyExamples: {
-          hello: {
-            endpoint: "hello",
+          get: {
+            endpoint: "api.example.com/hello",
             method: "GET"
           },
-          echo: {
-            endpoint: "echo",
+          getWithHttp: {
+            endpoint: "http://api.example.com/hello",
+            method: "GET"
+          },
+          post: {
+            endpoint: "api.example.com/echo",
             method: "POST",
             data: {
               message: "Hello, world!"
             }
           },
-          weather: {
-            endpoint: "weather",
+          withHeaders: {
+            endpoint: "api.example.com/secured",
             method: "GET",
-            data: {
-              location: "New York"
+            headers: {
+              "X-API-Key": "your-api-key"
             }
+          },
+          withToken: {
+            endpoint: "api.example.com/secured",
+            method: "GET",
+            access_token: "your-oauth-token"
+          },
+          customContentType: {
+            endpoint: "api.example.com/upload",
+            method: "POST",
+            data: "raw text content",
+            content_type: "text/plain"
           }
         },
         responseExamples: {
-          hello: {
+          success: {
             success: true,
             data: {
               message: "Hello, world!",
-              timestamp: "2025-06-02T12:00:00.000Z"
+              timestamp: "2025-06-04T12:00:00.000Z"
             }
           },
-          echo: {
-            success: true,
-            data: {
-              message: "Hello, world!"
-            }
+          error: {
+            success: false,
+            error: "API request failed: 404 Not Found"
           }
         },
+        notes: [
+          "URLs without http:// or https:// prefix will automatically have http:// prepended",
+          "For GET requests, data is not included in the request body",
+          "The access_token parameter will add an Authorization: Bearer header",
+          "The content_type parameter allows you to specify a custom Content-Type header (default is application/json)"
+        ],
         curlExamples: {
-          hello: `curl -X POST ${baseUrl}/api/session/{sessionId}/api \\
+          get: `curl -X POST ${baseUrl}/api/session/{sessionId}/api \\
     -H "Content-Type: application/json" \\
-    -d '{"endpoint": "hello", "method": "GET"}'`,
-          echo: `curl -X POST ${baseUrl}/api/session/{sessionId}/api \\
+    -d '{"endpoint": "api.example.com/hello", "method": "GET"}'`,
+          post: `curl -X POST ${baseUrl}/api/session/{sessionId}/api \\
     -H "Content-Type: application/json" \\
-    -d '{"endpoint": "echo", "method": "POST", "data": {"message": "Hello, world!"}}'`
+    -d '{"endpoint": "api.example.com/echo", "method": "POST", "data": {"message": "Hello, world!"}}'`,
+          withHeaders: `curl -X POST ${baseUrl}/api/session/{sessionId}/api \\
+    -H "Content-Type: application/json" \\
+    -d '{"endpoint": "api.example.com/secured", "method": "GET", "headers": {"X-API-Key": "your-api-key"}}'`,
+          withToken: `curl -X POST ${baseUrl}/api/session/{sessionId}/api \\
+    -H "Content-Type: application/json" \\
+    -d '{"endpoint": "api.example.com/secured", "method": "GET", "access_token": "your-oauth-token"}'`
         }
       },
       {
@@ -942,10 +1456,12 @@ app.get('/api/help', (req: any, res: any) => {
         encoding: "Optional encoding for file operations (default: utf-8)"
       },
       api: {
-        endpoint: "API endpoint to call",
+        endpoint: "API endpoint to call (with or without http:// prefix)",
         method: "HTTP method (GET, POST, PUT, DELETE)",
-        data: "Optional data to send with the request",
-        headers: "Optional headers for the request"
+        data: "Optional data to send with the request (ignored for GET requests)",
+        headers: "Optional headers for the request as key-value pairs",
+        access_token: "Optional OAuth token (adds Authorization: Bearer header)",
+        content_type: "Optional content type header (default: application/json)"
       }
     }
   };
@@ -1151,6 +1667,20 @@ function generateHtmlDocs(docs: any): string {
 app.listen(PORT, () => {
   console.log(`MCP server running on port ${PORT}`);
   console.log(`Base directory for file operations: ${process.env.BASE_DIR || './data'}`);
+  console.log(`Repository directory: ${process.env.REPO_DIR || path.join(process.env.BASE_DIR || './data', 'repos')}`);
+
+  // Log authentication status
+  if (process.env.GITHUB_ACCESS_TOKEN) {
+    console.log('GitHub access token is configured');
+  } else {
+    console.log('GitHub access token is not configured. Set GITHUB_ACCESS_TOKEN environment variable for private GitHub repositories');
+  }
+
+  if (process.env.GITLAB_ACCESS_TOKEN) {
+    console.log('GitLab access token is configured');
+  } else {
+    console.log('GitLab access token is not configured. Set GITLAB_ACCESS_TOKEN environment variable for private GitLab repositories');
+  }
 });
 
 // Error handling

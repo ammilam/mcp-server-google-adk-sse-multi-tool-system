@@ -28,6 +28,7 @@ The communication flow is:
 - Google ADK SDK installed (`pip install google-adk`)
 - Google Project with Vertex AI enabled
 - IAM permissions for the Google ADK agent to access Vertex AI
+- GitHub or Gitlab access tokens as environment variables for the MCP server for repository access
 
 #### Setting Up the Environment
 
@@ -40,8 +41,17 @@ The communication flow is:
 2. **Configure environment variables**:
    - For MCP server, make sure .env contains:
      ```
-     PORT=8080
-     BASE_DIR=./data
+     # Server Configuration
+      PORT=9000
+      BASE_DIR=./data
+
+      # Repository Access Tokens, allows the MCP server to access private repositories
+      GITHUB_ACCESS_TOKEN=your_github_token_here
+      GITLAB_ACCESS_TOKEN=your_gitlab_token_here
+
+      # Optional Configuration
+      REPO_DIR=./repos
+      MAX_EVENT_LISTENERS=100
      ```
    - For Google ADK agent, make sure .env contains:
      ```

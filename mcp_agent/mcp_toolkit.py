@@ -49,6 +49,7 @@ class MCPToolkit:
             logger.error(f"Error initializing session: {str(e)}")
             raise
     
+    
     def reconnect_session(self, session_id: str) -> bool:
         """Reconnect to an existing session"""
         try:
@@ -230,6 +231,33 @@ class MCPToolkit:
             "headers": headers
         })
     
+    def clone_repository(self, url: str) -> Dict:
+        """Clone a repository using the MCP repository tool"""
+        return self.execute_tool("repository", {
+            "operation": "clone",
+            "url": url,
+        })
+    
+    def list_repositories(self) -> Dict:
+        """List available repositories using the MCP repository tool"""
+        return self.execute_tool("repository", {
+            "operation": "list"
+        })
+    
+    def analyze_repository(self, repo_path: str) -> Dict:
+        """Analyze a repository using the MCP repository tool"""
+        return self.execute_tool("repository", {
+            "operation": "analyze",
+            "path": repo_path
+        })
+    
+    def generate_readme(self, repo_path: str) -> Dict:
+        """Generate a README for a repository using the MCP repository tool"""
+        return self.execute_tool("repository", {
+            "operation": "generate_readme",
+            "path": repo_path
+        })
+    
     # Session data operations
     def get_session_data(self, key: Optional[str] = None) -> Dict:
         """Get session data from MCP server"""
@@ -252,6 +280,7 @@ class MCPToolkit:
         return self.execute_tool("weather", {
             "location": location
         })
+    
 
 # Singleton instance
 _toolkit_instance = None

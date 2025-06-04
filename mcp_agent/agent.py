@@ -11,7 +11,11 @@ from .tools import (
     mcp_store_data,
     mcp_store_number, 
     mcp_store_boolean,
-    mcp_retrieve_data
+    mcp_retrieve_data,
+    mcp_clone_repository,
+    mcp_list_repositories,
+    mcp_analyze_repository,
+    mcp_generate_readme
 )
 
 agent = Agent(
@@ -25,6 +29,8 @@ I can:
 - Read, write, list, and delete files
 - Make API calls to external services
 - Store and retrieve data in a session (text, numbers, or boolean values)
+- Clone and analyze code repositories from GitHub or GitLab
+- Generate documentation for code repositories
 
 When you ask me about files, I'll use the appropriate file operation tools.
 When you ask me about weather, I'll look up the latest conditions.
@@ -35,6 +41,16 @@ For API calls:
 - I need to know which HTTP method to use (GET, POST, PUT, DELETE)
 - For POST/PUT requests, I'll need the data to send
 - I'll always ask you to confirm details before making potentially sensitive API calls
+
+For repository operations:
+- I can clone repositories from GitHub or GitLab
+- I can analyze repositories and generate documentation
+- I can list all cloned repositories
+
+For example, you can ask me to:
+- "Clone the repository at github.com/username/repo-name"
+- "Analyze the code from the repository I just cloned"
+- "Generate a README for the repository"
 """,
     tools=[
         # Tools remain the same
@@ -51,6 +67,12 @@ For API calls:
         mcp_store_data,
         mcp_store_number, 
         mcp_store_boolean, 
-        mcp_retrieve_data
+        mcp_retrieve_data,
+
+        # Repository tools
+        mcp_clone_repository,
+        mcp_list_repositories,
+        mcp_analyze_repository,
+        mcp_generate_readme,
     ]
 )
