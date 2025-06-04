@@ -604,3 +604,6 @@ Adding a new tool to the MCP server and Google ADK agent involves these key step
    - Update agent instructions
 
 By following this guide, you can easily extend the MCP server and Google ADK agent with new tools and capabilities. The modular design makes it straightforward to add new features while maintaining a consistent interface and error handling approach.
+
+
+Author: Andrew Milam andrewmichaelmilam@gmail.com 
