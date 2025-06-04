@@ -1,8 +1,12 @@
 import logging
 import os
-from google.adk.agents import Agent  # Updated import path
+import uvicorn
+from fastapi import FastAPI
+import time
+from google.adk.agents import Agent
+from google.adk.server import get_fast_api_app # Import get_fast_api_app
 from dotenv import load_dotenv
-from mcp_toolkit import get_toolkit
+from .mcp_toolkit import get_toolkit # Changed to relative import
 
 # Load environment variables
 load_dotenv()
@@ -15,7 +19,19 @@ logging.basicConfig(
 logger = logging.getLogger("mcp-agent-runner")
 
 # Import agent definition to ensure it's registered
-from agent import agent
+from .agent import agent # Changed to relative import
+
+AGENT_DIR = os.path.dirname(os.path.abspath(__file__))
+SERVE_WEB_INTERFACE = True
+ALLOWED_ORIGINS = ["http://localhost", "http://localhost:8080", "*"]
+SESSION_DB_URL = os.environ.get("SESSION_DB_URL", "sqlite:///./adk_sessions.db")
+
+app: FastAPI = get_fast_api_app(
+    agents_dir=AGENT_DIR,
+    session_db_url=SESSION_DB_URL,
+    allow_origins=ALLOWED_ORIGINS,
+    web=SERVE_WEB_INTERFACE,
+)
 
 def main():
     """Main function to run the MCP agent interactively"""
@@ -79,4 +95,5 @@ def main():
         toolkit.stop_sse_listener()
 
 if __name__ == "__main__":
-    main()
+    # Use the PORT environment variable provided by Cloud Run, defaulting to 8000
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
