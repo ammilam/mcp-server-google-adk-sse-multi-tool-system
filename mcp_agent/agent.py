@@ -1,5 +1,13 @@
-from google.adk.agents import Agent
+from dotenv import load_dotenv
+from google.adk.agents import Agent 
+import os
 import logging
+
+# Import toolkit early to initialize session
+from .mcp_toolkit import get_toolkit
+
+# Initialize the toolkit singleton - this ensures a session is created
+toolkit = get_toolkit()
 
 from .tools import (
     mcp_read_file, 

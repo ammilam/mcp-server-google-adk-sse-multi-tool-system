@@ -1,8 +1,8 @@
 import logging
 import os
-from google.adk.agents import execute_agent_by_name
+from google.adk.agents import Agent  # Updated import path
 from dotenv import load_dotenv
-from .mcp_toolkit import get_toolkit
+from mcp_toolkit import get_toolkit
 
 # Load environment variables
 load_dotenv()
@@ -15,7 +15,7 @@ logging.basicConfig(
 logger = logging.getLogger("mcp-agent-runner")
 
 # Import agent definition to ensure it's registered
-from .agent import agent
+from agent import agent
 
 def main():
     """Main function to run the MCP agent interactively"""
@@ -62,7 +62,8 @@ def main():
                 
             try:
                 # Execute agent with user input
-                response = execute_agent_by_name("mcp_agent", user_input)
+                # Using the agent instance directly instead of execute_agent_by_name
+                response = agent.execute_agent(user_input)
                 print(f"\nAgent: {response}")
             except Exception as e:
                 logger.error(f"Error executing agent: {str(e)}")

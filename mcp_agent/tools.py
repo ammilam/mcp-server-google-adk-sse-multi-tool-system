@@ -9,6 +9,31 @@ logger = logging.getLogger(__name__)
 # Get singleton MCP toolkit instance
 mcp_toolkit = get_toolkit()
 
+def get_toolkit_with_retry(max_retries=3, retry_delay=2):
+    from .mcp_toolkit import get_toolkit
+    
+    for attempt in range(max_retries):
+        try:
+            toolkit = get_toolkit()
+            # Test if session is active
+            if toolkit.session_id:
+                return toolkit
+            else:
+                logger.warning(f"No active session found (attempt {attempt+1}/{max_retries}), retrying...")
+                time.sleep(retry_delay)
+        except Exception as e:
+            logger.error(f"Error initializing toolkit (attempt {attempt+1}/{max_retries}): {str(e)}")
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+    
+    # Last attempt without catching exceptions
+    from .mcp_toolkit import get_toolkit
+    return get_toolkit()
+
+# Get singleton MCP toolkit instance with retry
+mcp_toolkit = get_toolkit_with_retry()
+
+
 # File System Tools
 def mcp_read_file(file_path: str) -> dict:
     """Reads a file from the file system.
@@ -20,6 +45,13 @@ def mcp_read_file(file_path: str) -> dict:
         dict: A dictionary with status ('success' or 'error') and either file content or error message
     """
     try:
+        # Ensure toolkit has active session
+        if not mcp_toolkit.session_id:
+            return {
+                "status": "error",
+                "error_message": "No active MCP session. Please try again."
+            }
+            
         result = mcp_toolkit.read_file(file_path)
         
         if result.get("success"):
