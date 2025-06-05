@@ -1,13 +1,13 @@
 import logging
-from typing import Dict, Any, Optional
-from .mcp_toolkit import get_toolkit
+import os
 import time
+from typing import Dict, Any, Optional
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Get singleton MCP toolkit instance
-mcp_toolkit = get_toolkit()
+from .mcp_toolkit import get_toolkit as _get_toolkit_internal
 
 def get_toolkit_with_retry(max_retries=3, retry_delay=2):
     from .mcp_toolkit import get_toolkit
@@ -26,9 +26,8 @@ def get_toolkit_with_retry(max_retries=3, retry_delay=2):
             if attempt < max_retries - 1:
                 time.sleep(retry_delay)
     
-    # Last attempt without catching exceptions
-    from .mcp_toolkit import get_toolkit
-    return get_toolkit()
+    # Return the toolkit instance even if session initialization failed
+    return _get_toolkit_internal()
 
 # Get singleton MCP toolkit instance with retry
 mcp_toolkit = get_toolkit_with_retry()

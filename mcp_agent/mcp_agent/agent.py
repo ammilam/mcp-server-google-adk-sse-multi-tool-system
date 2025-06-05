@@ -1,23 +1,23 @@
 from dotenv import load_dotenv
-from google.adk.agents import Agent 
+from google.adk.agents import Agent
 import os
 import logging
 
-# Import toolkit early to initialize session
 from .mcp_toolkit import get_toolkit
 
 # Initialize the toolkit singleton - this ensures a session is created
 toolkit = get_toolkit()
 
+# Primary way to import tools from within the package
 from .tools import (
-    mcp_read_file, 
-    mcp_write_file, 
-    mcp_list_files, 
+    mcp_read_file,
+    mcp_write_file,
+    mcp_list_files,
     mcp_delete_file,
     mcp_get_weather,
     mcp_call_api,
     mcp_store_data,
-    mcp_store_number, 
+    mcp_store_number,
     mcp_store_boolean,
     mcp_retrieve_data,
     mcp_clone_repository,
@@ -25,8 +25,9 @@ from .tools import (
     mcp_analyze_repository,
     mcp_generate_readme
 )
-
-agent = Agent(
+        
+# Rename to root_agent for ADK compatibility
+root_agent = Agent(
     name="mcp_agent",
     model="gemini-2.0-flash",
     description="Agent that can handle weather, time, and interact with a Model Control Protocol server",
@@ -84,3 +85,6 @@ For example, you can ask me to:
         mcp_generate_readme,
     ]
 )
+
+# Keep 'agent' for backward compatibility if needed
+agent = root_agent

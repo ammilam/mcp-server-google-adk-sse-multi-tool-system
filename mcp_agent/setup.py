@@ -9,6 +9,8 @@ setup(
         "sseclient-py>=1.7.2",
         "requests>=2.31.0",
         "python-dotenv>=1.0.0",
+        "fastapi>=0.95.0",
+        "uvicorn[standard]>=0.21.0",
     ],
     entry_points={
         "console_scripts": [

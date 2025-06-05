@@ -16,6 +16,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger("mcp-agent-runner")
 
+# No longer need sys.path.insert(0, "/app") if main.py is at the root
+# and mcp_agent is in the same directory or PYTHONPATH is set correctly in Docker.
+
 # Try to import ADK components for web UI
 try:
     # Use the recommended import path for get_fast_api_app
@@ -23,26 +26,33 @@ try:
     has_adk_web = True
     logger.info("Successfully imported ADK web interface components")
 except ImportError:
+    # Fallback if ADK web components are not found (less likely with google-adk in requirements)
     has_adk_web = False
     logger.warning("Could not import ADK web interface components - falling back to basic API")
 
 # Import our agent
 try:
-    # Import the agent package and the toolkit from the package
-    from mcp_agent import root_agent  # Updated to use root_agent
-    from mcp_agent.mcp_toolkit import get_toolkit
-    toolkit_instance = get_toolkit()  # Ensures session is initialized
-    logger.info(f"Agent and MCP Toolkit loaded successfully. Session ID: {toolkit_instance.session_id}")
+    from mcp_agent.mcp_agent import agent
     has_agent = True
-except ImportError as e:
-    logger.warning(f"Could not import agent, chat functionality will be disabled: {e}")
+    # Initialize the toolkit by calling get_toolkit() which is done in agent.py
+    from mcp_agent.mcp_toolkit import get_toolkit as init_toolkit
+    toolkit_instance = init_toolkit() # Ensures session is initialized
+    logger.info(f"Agent and MCP Toolkit loaded successfully. Session ID: {toolkit_instance.session_id}")
+except ImportError:
+    logger.warning("Could not import agent, chat functionality will be disabled")
     has_agent = False
+
+# Initialize the toolkit
+from mcp_agent.mcp_toolkit import get_toolkit
+toolkit = get_toolkit()
+logger.info(f"MCP Toolkit (re)confirmed with server URL: {toolkit.mcp_server_url}, Session ID: {toolkit.session_id}")
 
 # Create FastAPI app - try to use ADK's helper if available
 if has_adk_web:
     try:
         # AGENT_DIR should be the directory containing the 'mcp_agent' package
-        AGENT_DIR = os.path.dirname(os.path.abspath(__file__))  # This is the project root
+        # If main.py is at the root, this is the current directory.
+        AGENT_DIR = os.path.dirname(os.path.abspath(__file__)) # This is now the project root
 
         SESSION_DB_URL = os.environ.get("SESSION_DB_URL", "sqlite:///./sessions.db")
         # Example allowed origins for CORS
@@ -80,13 +90,12 @@ if not has_adk_web:
     @app.get("/")
     async def root():
         """Root endpoint - redirect to docs"""
-        return RedirectResponse(url="/docs")
+        # If ADK web is true, it serves its own UI at /
+        # Otherwise, redirect to FastAPI docs or a custom health/status
+        return RedirectResponse(url="/docs" if not has_adk_web else "/")
 
     @app.get("/health")
     async def health_check():
-        """Health check endpoint"""
-        from mcp_agent.mcp_toolkit import get_toolkit
-        toolkit = get_toolkit()
         return {"status": "healthy", "session_id": toolkit.session_id}
 
     # Define Pydantic models for chat
@@ -107,7 +116,7 @@ if not has_adk_web:
         try:
             logger.info(f"Received prompt: {request.message}")
             # Use the agent's generate method
-            agent_response = root_agent.generate(request.message)  # Using root_agent now
+            agent_response = agent.generate(request.message)
             response_text = agent_response.text if hasattr(agent_response, 'text') else str(agent_response)
             logger.info(f"Agent response generated: {response_text}")
             return PromptResponse(response=response_text)
@@ -119,28 +128,22 @@ if not has_adk_web:
 @app.on_event("startup")
 async def startup_event():
     """Ensure MCP session is initialized on startup."""
-    try:
-        from mcp_agent.mcp_toolkit import get_toolkit
-        toolkit = get_toolkit()
-        if not toolkit.session_id:
-            logger.info("Toolkit session_id not found on startup, attempting to initialize.")
-            toolkit.initialize_session()
+    if not toolkit.session_id:
+        logger.warning("Toolkit session_id not found on startup, attempting to initialize.")
+        try:
+            toolkit.initialize_session() # This might be redundant if agent import already did it
             if toolkit.session_id:
                 logger.info(f"MCP session re-initialized on startup: {toolkit.session_id}")
             else:
                 logger.error("MCP session could not be initialized on startup.")
-        else:
-            logger.info(f"MCP session already initialized: {toolkit.session_id}")
-    except Exception as e:
-        logger.error(f"Error initializing MCP session on startup: {str(e)}")
+        except Exception as e:
+            logger.error(f"Error initializing MCP session on startup: {str(e)}")
 
 @app.get("/custom-status")
 async def custom_status():
     """Custom status endpoint"""
-    from mcp_agent.mcp_toolkit import get_toolkit
-    toolkit = get_toolkit()
     return {"custom": "endpoint", "mcp_status": "connected" if toolkit.session_id else "disconnected", "session_id": toolkit.session_id}
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", "8000"))  # Use 8000 for containers
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)  # reload=True for local dev
+    port = int(os.getenv("PORT", "8080")) # Default to 8080 for GKE/Cloud Run
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True) # reload=True for local dev

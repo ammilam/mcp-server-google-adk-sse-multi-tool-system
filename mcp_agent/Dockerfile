@@ -1,20 +1,36 @@
-FROM python:3.13-slim
-WORKDIR /service
+# Use an official Python runtime as a parent image
+FROM python:3.10-slim
 
-COPY requirements.txt /service/requirements.txt
-RUN pip install --no-cache-dir -r /service/requirements.txt
+# Set the working directory in the container
+WORKDIR /app
 
-RUN mkdir -p /service/mcp_agent && \
-    adduser --disabled-password --gecos "" myuser
- 
-COPY . /service/mcp_agent/
+# Copy the requirements file into the container at /app
+COPY requirements.txt .
 
-RUN chown -R myuser:myuser /service
+# Install any needed packages specified in requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-USER myuser
-ENV PYTHONPATH="/service"
-ENV PORT=8000
+# Copy the package and main.py
+COPY ./mcp_agent ./mcp_agent
+COPY main.py setup.py ./
+
+# Install the package in development mode
+RUN pip install -e .
+
+# Make port 8080 available to the world outside this container
 EXPOSE 8000
-ENV PATH="/home/myuser/.local/bin:$PATH"
+
+# Define environment variable for the port (Cloud Run compatibility, GKE will also use this)
+ENV PORT 8000
+ENV GOOGLE_CLOUD_LOCATION "us-central1"
+ENV GOOGLE_GENAI_USE_VERTEXAI "True"
 ENV MCP_SERVER_URL http://localhost:9000
-CMD ["uvicorn", "mcp_agent.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# You can also set MCP_SERVER_URL here if it's fixed, or prefer to set it in deployment.yaml
+ENV MCP_SERVER_URL http://host.docker.internal:9000
+
+# Create .dockerignore file if not exists to exclude sessions.db
+RUN echo "sessions.db" > .dockerignore
+
+# Run main.py when the container launches
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
