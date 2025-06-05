@@ -1,0 +1,130 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mcp-server-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mcp-server-config
+data:
+  PORT: "9000"
+  BASE_DIR: "/app/data"
+  REPO_DIR: "/app/data/repos"
+  MAX_EVENT_LISTENERS: "100"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mcp-server-secrets
+type: Opaque
+stringData:
+  GITHUB_ACCESS_TOKEN: "your-github-token-here"
+  GITLAB_ACCESS_TOKEN: "your-gitlab-token-here"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-server
+  labels:
+    app: mcp-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-server
+  template:
+    metadata:
+      labels:
+        app: mcp-server
+    spec:
+      containers:
+      - name: mcp-server
+        image: mcp-server:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 9000
+        env:
+        - name: PORT
+          valueFrom:
+            configMapKeyRef:
+              name: mcp-server-config
+              key: PORT
+        - name: BASE_DIR
+          valueFrom:
+            configMapKeyRef:
+              name: mcp-server-config
+              key: BASE_DIR
+        - name: REPO_DIR
+          valueFrom:
+            configMapKeyRef:
+              name: mcp-server-config
+              key: REPO_DIR
+        - name: MAX_EVENT_LISTENERS
+          valueFrom:
+            configMapKeyRef:
+              name: mcp-server-config
+              key: MAX_EVENT_LISTENERS
+        - name: GITHUB_ACCESS_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: mcp-server-secrets
+              key: GITHUB_ACCESS_TOKEN
+              optional: true
+        - name: GITLAB_ACCESS_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: mcp-server-secrets
+              key: GITLAB_ACCESS_TOKEN
+              optional: true
+        resources:
+          limits:
+            cpu: "1"
+            memory: "1Gi"
+          requests:
+            cpu: "500m"
+            memory: "512Mi"
+        volumeMounts:
+        - name: mcp-storage
+          mountPath: /app/data
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 9000
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 9000
+          initialDelaySeconds: 15
+          periodSeconds: 10
+      volumes:
+      - name: mcp-storage
+        persistentVolumeClaim:
+          claimName: mcp-server-data
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mcp-server-ingress
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+spec:
+  rules:
+  - http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: mcp-server
+            port:
+              number: 9000
