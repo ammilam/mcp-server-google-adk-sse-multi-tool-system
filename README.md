@@ -1,10 +1,6 @@
 # MCP Server and Google ADK Multi-Tool System
 
-## Adding a New Tool to MCP Server and Google ADK Agent System
-
-This step-by-step guide will walk through the entire process of adding a new tool to the MCP server and making it available to a Google ADK agent. The guide below will use an image generation tool as our example.
-
-### 1. System Overview
+## System Overview
 
 The system consists of two main components:
 
@@ -19,9 +15,11 @@ The communication flow is:
 - MCP server returns result to the agent
 - Agent formats the response for the user
 
-### 2. Environment Setup
+## Running Everything
 
-#### Prerequisites
+This guide will help you set up and run the MCP server and Google ADK agent system, including adding new tools to the system.
+
+### Prerequisites
 
 - Node.js (v16+) for the MCP server
 - Python (v3.9+) for the Google ADK agent
@@ -30,7 +28,7 @@ The communication flow is:
 - IAM permissions for the Google ADK agent to access Vertex AI
 - GitHub or Gitlab access tokens as environment variables for the MCP server for repository access
 
-#### Setting Up the Environment
+### Setting Up the Environment
 
 1. **Set up the MCP serve and the Google ADK Agentr**:
    ```bash
@@ -84,6 +82,98 @@ The communication flow is:
    - Chat with the agent to ensure it's working
    
 6. **Test existing tools**:
+
+## Running Google ADK Agent In Kubernetes
+
+To run the Google ADK agent in Kubernetes, follow these steps:
+1. **Build the Docker image**:
+   ```bash
+   docker build -t mcp-agent:latest -f mcp_agent/Dockerfile .
+   ```
+2. **Push the image to Google Artifact Registry**:
+   ```bash
+   # Build and tag the image
+  gcloud builds submit \
+      --tag $GOOGLE_CLOUD_LOCATION-docker.pkg.dev/$GOOGLE_CLOUD_PROJECT/mcp-agent-repo/mcp-agent:latest \
+      --project=$GOOGLE_CLOUD_PROJECT \
+      .
+
+  # Verify the image was pushed
+  gcloud artifacts docker images list \
+      $GOOGLE_CLOUD_LOCATION-docker.pkg.dev/$GOOGLE_CLOUD_PROJECT/mcp-agent-repo \
+      --project=$GOOGLE_CLOUD_PROJECT \
+      --format=json
+   ```
+3. **Create a Kubernetes deployment**:
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-agent
+  template:
+    metadata:
+      labels:
+        app: mcp-agent
+    spec:
+      serviceAccount: mcp-agent-sa
+      containers:
+      - name: mcp-agent
+        imagePullPolicy: Always
+        image: us-central1-docker.pkg.dev/your-gar-registry/mcp-agent-repo/mcp-agent:latest
+        resources:
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+            ephemeral-storage: "1Gi"
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+            ephemeral-storage: "512Mi"
+        ports:
+        - containerPort: 8000
+        env:
+          - name: PORT
+            value: "8000"
+          - name: GOOGLE_CLOUD_PROJECT
+            value: "your-google-project-id"
+          - name: GOOGLE_CLOUD_LOCATION
+            value: "us-central1"
+          - name: GOOGLE_GENAI_USE_VERTEXAI
+            value: "True"
+          # Use a service name or an external access method for the MCP server
+          - name: MCP_SERVER_URL
+            value: "http://mcp-server-service:9000"
+        volumeMounts:
+        - name: credentials
+          mountPath: "/app/credentials"
+          readOnly: true
+      volumes:
+      - name: credentials
+        secret:
+          secretName: mcp-agent-credentials
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-agent
+spec:       
+  type: LoadBalancer
+  ports:
+    - port: 80
+      targetPort: 8000
+  selector:
+    app: mcp-agent
+```
+
+## Adding a New Tool to MCP Server and Google ADK Agent System
+
+This step-by-step guide will walk through the entire process of adding a new tool to the MCP server and making it available to a Google ADK agent. The guide below will use an image generation tool as our example.
+
 
 ### 3. Adding a New Tool to MCP Server
 
