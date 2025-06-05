@@ -69,8 +69,13 @@ The communication flow is:
 
 4. **Run Google ADK Agent**:
    ```bash
-   # run this from the root directory of the project to start the Google ADK agent (in another terminal)
-   adk web
+    # run this from the root directory of this repository to start the Google ADK agent
+    
+    # will start this in web mode
+    ./scripts/run-agent.sh web
+    
+    # will start this in terminal mode
+    ./scripts/run-agent.sh run
    ```
 
 5. **Open the web interface and select mcp_agent**:
