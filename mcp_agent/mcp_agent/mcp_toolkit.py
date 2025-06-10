@@ -231,6 +231,14 @@ class MCPToolkit:
             "headers": headers
         })
     
+    def debug_gitlab_job(self, job_id: str, project_id: str, job_url: str) -> Dict:
+        """Debug a GitLab job using the MCP debug tool"""
+        return self.execute_tool("debug_gitlab_job", {
+            "job_id": job_id,
+            "project_id": project_id,
+            "job_url": job_url
+        })
+    
     def clone_repository(self, url: str) -> Dict:
         """Clone a repository using the MCP repository tool"""
         return self.execute_tool("repository", {

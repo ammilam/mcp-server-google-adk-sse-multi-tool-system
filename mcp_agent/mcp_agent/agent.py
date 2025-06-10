@@ -23,7 +23,8 @@ from .tools import (
     mcp_clone_repository,
     mcp_list_repositories,
     mcp_analyze_repository,
-    mcp_generate_readme
+    mcp_generate_readme,
+    debug_gitlab_job,
 )
         
 # Rename to root_agent for ADK compatibility
@@ -40,6 +41,7 @@ I can:
 - Store and retrieve data in a session (text, numbers, or boolean values)
 - Clone and analyze code repositories from GitHub or GitLab
 - Generate documentation for code repositories
+- Debug and analyze GitLab CI/CD job failures
 
 When you ask me about files, I'll use the appropriate file operation tools.
 When you ask me about weather, I'll look up the latest conditions.
@@ -60,6 +62,14 @@ For example, you can ask me to:
 - "Clone the repository at github.com/username/repo-name"
 - "Analyze the code from the repository I just cloned"
 - "Generate a README for the repository"
+
+When you ask me about GitLab job failures, I can:
+- Fetch and analyze job logs using server-side authentication (no need to provide tokens)
+- Identify common error patterns
+- Suggest potential fixes for pipeline issues
+- Provide comprehensive analysis for infrastructure and cloud deployments
+- Show you the raw logs for detailed inspection
+
 """,
     tools=[
         # Tools remain the same
@@ -83,6 +93,9 @@ For example, you can ask me to:
         mcp_list_repositories,
         mcp_analyze_repository,
         mcp_generate_readme,
+
+        # debug gitlab tools
+        debug_gitlab_job
     ]
 )
 

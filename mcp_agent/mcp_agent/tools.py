@@ -503,3 +503,100 @@ def mcp_retrieve_data(key: str) -> dict:
             "status": "error",
             "error_message": f"Exception: {str(e)}"
         }
+    
+def debug_gitlab_job(job_url: str, access_token: Optional[str] = None) -> dict:
+    """Debugs a GitLab job by analyzing its logs and providing detailed troubleshooting insights.
+    
+    This tool fetches the job trace logs from a GitLab pipeline job and performs 
+    comprehensive analysis to identify errors, their root causes, and suggest solutions. 
+    It's particularly effective for infrastructure-as-code, cloud deployments, and 
+    CI/CD pipeline failures.
+    
+    Args:
+        job_url: The full URL of the GitLab job to debug
+               (e.g., 'https://gitlab.com/group/project/-/jobs/1234567')
+        access_token: Optional access token for private repositories, dont prompt if not provided.
+    
+    Returns:
+        dict: A detailed analysis including identified issues, solutions, 
+              and contextual information about the job failure
+    """
+    try:
+        result = mcp_toolkit.execute_tool("debug_gitlab_job", {
+            "operation": "debug",
+            "job_url": job_url,
+            **({"access_token": access_token} if access_token else {})
+        })
+
+        if not result:
+            logger.error("No result returned from debug_gitlab_job tool")
+            return {
+                "status": "error",
+                "error_message": "No result returned from debug_gitlab_job tool"
+            }
+        
+        if not result.get("success"):
+            logger.error(f"Error debugging GitLab job: {result.get('error', 'Unknown error')}")
+            return {
+                "status": "error",
+                "error_message": result.get("error", "Unknown error debugging GitLab job")
+            }
+            
+        # Process and format the analysis results
+        data = result.get("data", {})
+        analysis = data.get("analysis", {})
+        
+        if not analysis:
+            logger.warning("No analysis results in GitLab debug response")
+            return {
+                "status": "success",
+                "raw_logs": data.get("raw_logs", "No logs available"),
+                "message": "Job logs retrieved but no analysis was performed"
+            }
+            
+        # Extract contextual analysis for more structured response
+        contextual = analysis.get("contextual_analysis", {})
+        technologies = contextual.get("technologiesDetected", [])
+        failure_stage = contextual.get("failureStage", "unknown")
+        identified_issues = analysis.get("identified_issues", [])
+            
+        return {
+            "status": "success",
+            "job_status": analysis.get("job_status", "Unknown"),
+            "failure_stage": failure_stage,
+            "technologies_detected": technologies,
+            "error_count": analysis.get("error_count", 0),
+            "warning_count": analysis.get("warning_count", 0),
+            
+            # Detailed error analysis
+            "identified_issues": [
+                {
+                    "category": issue.get("category"),
+                    "issue": issue.get("issue"),
+                    "solution": issue.get("solution")
+                }
+                for issue in identified_issues
+            ],
+            
+            # Root causes are now prioritized by relevance
+            "root_causes": analysis.get("root_causes", ["Unknown"]),
+            
+            # More comprehensive solution suggestions
+            "fix_suggestions": analysis.get("suggestions", []),
+            
+            # Common pitfalls specific to the detected technologies
+            "common_pitfalls": contextual.get("commonPitfalls", []),
+            
+            # Sample of actual errors for review
+            "error_samples": analysis.get("errors", []),
+            
+            # Flag for log availability
+            "raw_logs_available": "raw_logs" in data
+        }
+    except Exception as e:
+        logger.error(f"Error in debug_gitlab_job: {str(e)}")
+        return {
+            "status": "error",
+            "error_message": f"Exception: {str(e)}"
+        }
+    

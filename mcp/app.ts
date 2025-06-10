@@ -110,6 +110,32 @@ const getWeatherTool = async (location: string): Promise<{ success: boolean; dat
   }
 };
 
+async function handleDebugJobTool(parameters: any, sessionId: string): Promise<{ success: boolean; data?: any; error?: string }> {
+  // Check for required parameters
+  if (!parameters.job_url) {
+    return {
+      success: false,
+      error: 'Job URL is required for GitLab job debug operation'
+    };
+  }
+  
+  console.log(`Processing GitLab job debug for URL: ${parameters.job_url}`);
+  
+  // Create a copy of the parameters to avoid modifying the original
+  const debugParams = { ...parameters };
+  
+  // Always pass 'debug' as the operation parameter
+  debugParams.operation = 'debug';
+  
+  // Only pass access_token if it was explicitly provided
+  // Otherwise, debugGitlabJobTool will use the server's token
+  if (!debugParams.access_token) {
+    delete debugParams.access_token;
+  }
+  
+  return await debugGitlabJobTool(debugParams, sessionId);
+}
+
 async function handleRepoTool(parameters: any, sessionId: string) {
   const operation = parameters.operation;
 
@@ -182,6 +208,311 @@ const getRepositoryPathResolver = () => {
 // Create the repository path resolver
 const repoPathResolver = getRepositoryPathResolver();
 
+function analyzeGitLabJobLogs(logs: string): any {
+  console.log("Starting comprehensive log analysis...");
+  
+  // Parse logs into lines for analysis
+  const lines = logs.split('\n');
+  const errorLines: string[] = [];
+  const warningLines: string[] = [];
+  const infoLines: string[] = [];
+  
+  // Advanced pattern matching for various technologies
+  const patterns = {
+    docker: {
+      errors: [
+        { pattern: /image.*not\s*found/i, issue: "Docker image not found", solution: "Verify the image name and ensure it exists in your registry" },
+        { pattern: /permission denied/i, issue: "Docker permission issue", solution: "Check if the runner has proper permissions to pull/push images" },
+        { pattern: /no space left on device/i, issue: "Disk space issue", solution: "Clean up unnecessary images or increase disk space on the runner" }
+      ]
+    },
+    kubernetes: {
+      errors: [
+        { pattern: /error validating|validation failed/i, issue: "Kubernetes manifest validation failure", solution: "Check your YAML files for syntax errors or invalid configurations" },
+        { pattern: /forbidden: [^\n]+cannot (\w+) resource/i, issue: "Kubernetes permission issue", solution: "Verify service account permissions and RBAC settings" },
+        { pattern: /admission webhook.*denied/i, issue: "Admission controller rejection", solution: "Review the webhook policy constraints and adjust your resources accordingly" }
+      ]
+    },
+    terraform: {
+      errors: [
+        { pattern: /error applying plan/i, issue: "Terraform apply failure", solution: "Review the specific resource errors and verify your configurations" },
+        { pattern: /Error: configuring Terraform AWS Provider/i, issue: "AWS provider configuration issue", solution: "Check AWS credentials and region settings" },
+        { pattern: /Error: Error creating .* ResourceNotFoundException/i, issue: "Resource not found", solution: "Verify the specified resource exists or check permissions" }
+      ]
+    },
+    gcp: {
+      errors: [
+        { pattern: /gcloud: command not found/i, issue: "gcloud CLI not installed", solution: "Ensure gcloud CLI is installed in your CI environment" },
+        { pattern: /ERROR: \(gcloud\.[\w\.]+\)/i, issue: "gcloud command error", solution: "Check gcloud command parameters and permissions" },
+        { pattern: /forbidden: .* does not have .* permission/i, issue: "GCP permission issue", solution: "Verify service account has the required IAM roles" },
+        { pattern: /NOT_FOUND: The resource .* was not found/i, issue: "GCP resource not found", solution: "Check if the referenced resource exists or is accessible" }
+      ]
+    },
+    npm: {
+      errors: [
+        { pattern: /npm ERR! code E404/i, issue: "NPM package not found", solution: "Verify package name and version in package.json" },
+        { pattern: /npm ERR! code ENOENT/i, issue: "File or directory not found", solution: "Check file paths in your package.json scripts" },
+        { pattern: /npm ERR! code ELIFECYCLE/i, issue: "NPM script execution failure", solution: "Examine the specific script that failed in package.json" }
+      ]
+    },
+    python: {
+      errors: [
+        { pattern: /ModuleNotFoundError: No module named/i, issue: "Python module not found", solution: "Ensure all dependencies are in requirements.txt and properly installed" },
+        { pattern: /SyntaxError: /i, issue: "Python syntax error", solution: "Fix syntax errors in your Python code" },
+        { pattern: /ImportError: /i, issue: "Python import error", solution: "Check your import statements and ensure packages are installed" }
+      ]
+    },
+    java: {
+      errors: [
+        { pattern: /could not find or load main class/i, issue: "Java class not found", solution: "Verify classpath and package structure" },
+        { pattern: /compilation failure/i, issue: "Java compilation error", solution: "Fix compile-time errors in your Java code" },
+        { pattern: /OutOfMemoryError/i, issue: "Java out of memory error", solution: "Increase memory allocation for the Java process or optimize memory usage" }
+      ]
+    },
+    general: {
+      errors: [
+        { pattern: /command not found/i, issue: "Command not available", solution: "Ensure the required CLI tools are installed in your CI environment" },
+        { pattern: /connection timed out/i, issue: "Network timeout", solution: "Check network connectivity and endpoint availability" },
+        { pattern: /authentication failed/i, issue: "Authentication error", solution: "Verify credentials and access tokens" },
+        { pattern: /insufficient memory/i, issue: "Memory issue", solution: "Increase memory allocation for your job" },
+        { pattern: /quota exceeded/i, issue: "Resource quota exceeded", solution: "Optimize resource utilization or request quota increase" }
+      ]
+    }
+  };
+  
+  // Storage for identified issues
+  const issues: Array<{category: string, issue: string, solution: string, line: string}> = [];
+  const technologies = new Set<string>();
+  
+  // Detect CI/CD stage
+  const stagePatterns = [
+    { pattern: /building|build stage|build step|building image|docker build/i, stage: "build" },
+    { pattern: /testing|test stage|running tests|test step|test suite|test runner/i, stage: "test" },
+    { pattern: /deploying|deployment|deploy stage|releasing|promotion|promote to/i, stage: "deploy" },
+    { pattern: /linting|lint check|code quality|quality gate|sonar/i, stage: "lint" },
+    { pattern: /security scan|vulnerability|cve|snyk|owasp/i, stage: "security" },
+    { pattern: /terraform plan|terraform init|terraform apply|tf apply/i, stage: "infrastructure" },
+  ];
+  
+  let detectedStage = "unknown";
+  
+  // Analyze logs
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lowerLine = line.toLowerCase();
+    
+    // Detect CI/CD stage
+    for (const stageDef of stagePatterns) {
+      if (stageDef.pattern.test(lowerLine)) {
+        detectedStage = stageDef.stage;
+      }
+    }
+    
+    // Detect technologies used
+    if (lowerLine.includes("docker")) technologies.add("docker");
+    if (lowerLine.includes("kubectl") || lowerLine.includes("kubernetes") || lowerLine.includes(" k8s ")) technologies.add("kubernetes");
+    if (lowerLine.includes("terraform") || lowerLine.includes(" tf ")) technologies.add("terraform");
+    if (lowerLine.includes("gcloud") || lowerLine.includes("gsutil") || lowerLine.includes("google cloud")) technologies.add("gcp");
+    if (lowerLine.includes("npm ")) technologies.add("npm");
+    if (lowerLine.includes("python") || lowerLine.includes("pip ")) technologies.add("python");
+    if (lowerLine.includes("gradle") || lowerLine.includes("mvn ") || lowerLine.includes("java ")) technologies.add("java");
+    
+    // Identify errors and warnings
+    if (lowerLine.includes("error") || lowerLine.includes("exception") || lowerLine.includes("failed") || 
+        lowerLine.includes("fatal") || lowerLine.includes("panic")) {
+      errorLines.push(line);
+      
+      // Pattern matching against known issues
+      for (const [category, categoryPatterns] of Object.entries(patterns)) {
+        for (const errorPattern of categoryPatterns.errors) {
+          if (errorPattern.pattern.test(line)) {
+            issues.push({
+              category,
+              issue: errorPattern.issue,
+              solution: errorPattern.solution,
+              line
+            });
+            break;
+          }
+        }
+      }
+    } else if (lowerLine.includes("warning") || lowerLine.includes("warn")) {
+      warningLines.push(line);
+    } else if (lowerLine.includes("info") || lowerLine.includes("notice")) {
+      infoLines.push(line);
+    }
+  }
+  
+  // If no specific issues were identified but we have errors, add a general issue
+  if (issues.length === 0 && errorLines.length > 0) {
+    issues.push({
+      category: "general",
+      issue: "Unclassified error detected",
+      solution: "Review the error details and check your pipeline configuration",
+      line: errorLines[0]
+    });
+  }
+  
+  // Generate targeted solutions based on the specific errors
+  const solutions = issues.map(issue => issue.solution);
+  if (solutions.length === 0 && errorLines.length > 0) {
+    // Generate fallback solutions if no specific ones were identified
+    if (technologies.has("docker")) {
+      solutions.push("Verify your Dockerfile syntax and build configuration");
+    }
+    if (technologies.has("kubernetes")) {
+      solutions.push("Check your Kubernetes manifests for syntax errors and ensure proper RBAC permissions");
+    }
+    if (technologies.has("gcp")) {
+      solutions.push("Ensure your GCP service account has sufficient permissions for the operations");
+    }
+    if (technologies.has("terraform")) {
+      solutions.push("Validate your Terraform configuration and check for state issues");
+    }
+    
+    // Add a general solution if nothing specific was suggested
+    if (solutions.length === 0) {
+      solutions.push("Review the full logs to understand the specific error context");
+      solutions.push("Check the job configuration in .gitlab-ci.yml for potential syntax or configuration issues");
+    }
+  }
+  
+  // Prioritize issues by their position in the log (later errors are often more relevant)
+  const prioritizedIssues = [...issues].sort((a, b) => {
+    const aIndex = lines.indexOf(a.line);
+    const bIndex = lines.indexOf(b.line);
+    return bIndex - aIndex;
+  });
+  
+  // Context-aware analysis
+   const contextualInsights: {
+    failureStage: string;
+    technologiesDetected: string[];
+    potentialRootCauses: Array<{category: string, issue: string}>;
+    commonPitfalls: string[];
+  } = {
+    failureStage: detectedStage,
+    technologiesDetected: Array.from(technologies),
+    potentialRootCauses: prioritizedIssues.slice(0, 3).map(issue => ({
+      category: issue.category,
+      issue: issue.issue
+    })),
+    commonPitfalls: []
+  };
+  
+  // Add technology-specific insights
+  if (technologies.has("gcp")) {
+    contextualInsights.commonPitfalls.push(
+      "GCP deployments often fail due to IAM permission issues - verify service account roles",
+      "Ensure you've activated the required APIs in your GCP project",
+      "Check for quota limits that might be affecting your deployment"
+    );
+  }
+  if (technologies.has("kubernetes")) {
+    contextualInsights.commonPitfalls.push(
+      "Namespace restrictions or resource quotas could be limiting your deployment",
+      "Verify that your Kubernetes manifests are compatible with the cluster version",
+      "Custom admission controllers might be blocking certain configurations"
+    );
+  }
+  
+  return {
+    error_count: errorLines.length,
+    warning_count: warningLines.length,
+    info_count: infoLines.length,
+    errors: errorLines.slice(0, 10), // First 10 errors
+    warnings: warningLines.slice(0, 10), // First 10 warnings
+    root_causes: prioritizedIssues.slice(0, 3).map(issue => `${issue.category}: ${issue.issue}`),
+    identified_issues: prioritizedIssues.slice(0, 5),
+    suggestions: solutions,
+    job_status: errorLines.length > 0 ? 'Failed' : 'Successful',
+    contextual_analysis: contextualInsights
+  };
+}
+
+const debugGitlabJobTool = async (parameters: any, sessionId: string): Promise<{ success: boolean; data?: any; error?: string }> => {
+  // Validate operation parameter
+  const { operation, job_url, access_token } = parameters;
+
+  if (!operation) {
+    return { success: false, error: 'Operation parameter is required for GitLab job operations' };
+  }
+
+  if (operation !== 'debug') {
+    return { success: false, error: `Unsupported GitLab job operation: ${operation}. Supported operations: debug` };
+  }
+
+  if (!job_url) {
+    return { success: false, error: 'Job URL is required' };
+  }
+
+  if (!sessionId) {
+    return { success: false, error: 'Session ID is required for GitLab pipeline operations' };
+  }
+
+  // Use the provided token OR get it from environment variables
+  // This allows tokens to be managed server-side
+  let token = access_token || process.env.GITLAB_ACCESS_TOKEN;
+
+  if (!token) {
+    // Instead of failing, log a warning and continue with limited functionality
+    console.warn("No GitLab access token provided or configured. Private repositories will be inaccessible.");
+    // Return error only for private repos, which we'll detect when we try to access them
+  }
+
+  // Try to download the pipeline logs
+  const job_trace_url: string = job_url + '/trace';
+
+  try {
+    console.log(`Fetching GitLab job logs from: ${job_trace_url}`);
+    
+    // Create headers object with or without authorization
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json'
+    };
+    
+    // Only add Authorization header if we have a token
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    const response = await axios.get(job_trace_url, { headers });
+    
+    if (response.status === 200) {
+      // Basic log analysis - this could be enhanced further
+      const logs = response.data;
+      const analysisResult = analyzeGitLabJobLogs(logs);
+      
+      return {
+        success: true,
+        data: {
+          raw_logs: logs,
+          analysis: analysisResult
+        }
+      };
+    } else {
+      return {
+        success: false,
+        error: `Failed to fetch pipeline logs: ${response.status} ${response.statusText}`
+      };
+    }
+  } catch (error: any) {
+    console.error(`Error fetching GitLab job logs:`, error);
+    
+    // Provide a more helpful message if it appears to be an authorization error
+    if (error.response && error.response.status === 401) {
+      return {
+        success: false,
+        error: 'Authentication failed: The GitLab job requires authentication. Please configure GITLAB_ACCESS_TOKEN on the MCP server.'
+      };
+    }
+    
+    return {
+      success: false,
+      error: error.message || 'Unknown error fetching GitLab job logs'
+    };
+  }
+}
 
 const repoTool = async (operation: RepoOperation): Promise<{ success: boolean; data?: any; error?: string }> => {
   try {
@@ -969,6 +1300,9 @@ app.post('/api/adk-webhook', express.json({ limit: '50mb' }), async (req: any, r
         break;
       case 'repository':
         result = await handleRepoTool(parameters, mcpSessionId);
+        break;
+      case 'debug_gitlab_job':
+        result = await handleDebugJobTool(parameters, mcpSessionId);
         break;
       // Add more cases here for additional tools
       default:
