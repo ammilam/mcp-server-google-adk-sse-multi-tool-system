@@ -505,23 +505,23 @@ def mcp_retrieve_data(key: str) -> dict:
         }
     
 def debug_gitlab_job(job_url: str, access_token: Optional[str] = None) -> dict:
-    """Debugs a GitLab job by analyzing its logs and providing detailed troubleshooting insights.
+    """Debugs a GitLab job by analyzing its trace logs and providing insights.
     
-    This tool fetches the job trace logs from a GitLab pipeline job and performs 
-    comprehensive analysis to identify errors, their root causes, and suggest solutions. 
-    It's particularly effective for infrastructure-as-code, cloud deployments, and 
-    CI/CD pipeline failures.
+    This tool fetches trace logs from GitLab's API and analyzes them to identify
+    errors, issues, and potential solutions. Works with both gitlab.com and 
+    self-hosted GitLab instances.
     
     Args:
         job_url: The full URL of the GitLab job to debug
-               (e.g., 'https://gitlab.com/group/project/-/jobs/1234567')
-        access_token: Optional access token for private repositories, dont prompt if not provided.
+               (e.g., 'https://gitlab.com/group/project/-/jobs/1234567' or
+                      'https://gitlab.example.com/group/project/-/jobs/1234567')
+        access_token: Optional access token for private repositories
     
     Returns:
-        dict: A detailed analysis including identified issues, solutions, 
-              and contextual information about the job failure
+        dict: A comprehensive analysis of the job logs and suggested fixes
     """
     try:
+        # Send request to MCP server
         result = mcp_toolkit.execute_tool("debug_gitlab_job", {
             "operation": "debug",
             "job_url": job_url,
@@ -542,56 +542,45 @@ def debug_gitlab_job(job_url: str, access_token: Optional[str] = None) -> dict:
                 "error_message": result.get("error", "Unknown error debugging GitLab job")
             }
             
-        # Process and format the analysis results
+        # Process the data but leave most analysis to be done dynamically by the LLM
         data = result.get("data", {})
+        raw_logs = data.get("raw_logs", "")
         analysis = data.get("analysis", {})
+        job_metadata = analysis.get("gitlab_job_metadata", {})
         
-        if not analysis:
-            logger.warning("No analysis results in GitLab debug response")
-            return {
-                "status": "success",
-                "raw_logs": data.get("raw_logs", "No logs available"),
-                "message": "Job logs retrieved but no analysis was performed"
-            }
-            
-        # Extract contextual analysis for more structured response
-        contextual = analysis.get("contextual_analysis", {})
-        technologies = contextual.get("technologiesDetected", [])
-        failure_stage = contextual.get("failureStage", "unknown")
-        identified_issues = analysis.get("identified_issues", [])
-            
+        # Extract GitLab instance information
+        gitlab_instance = data.get("gitlab_instance", "Unknown GitLab instance")
+        project_path = data.get("project_path", "Unknown project")
+        
+        # Provide basic information from the server for the agent to analyze
         return {
             "status": "success",
-            "job_status": analysis.get("job_status", "Unknown"),
-            "failure_stage": failure_stage,
-            "technologies_detected": technologies,
-            "error_count": analysis.get("error_count", 0),
-            "warning_count": analysis.get("warning_count", 0),
-            
-            # Detailed error analysis
-            "identified_issues": [
-                {
-                    "category": issue.get("category"),
-                    "issue": issue.get("issue"),
-                    "solution": issue.get("solution")
-                }
-                for issue in identified_issues
-            ],
-            
-            # Root causes are now prioritized by relevance
-            "root_causes": analysis.get("root_causes", ["Unknown"]),
-            
-            # More comprehensive solution suggestions
-            "fix_suggestions": analysis.get("suggestions", []),
-            
-            # Common pitfalls specific to the detected technologies
-            "common_pitfalls": contextual.get("commonPitfalls", []),
-            
-            # Sample of actual errors for review
+            "job_url": data.get("job_url"),
+            "gitlab_instance": gitlab_instance,
+            "project_path": project_path,
+            "job_metadata": {
+                "id": job_metadata.get("id"),
+                "status": job_metadata.get("status"),
+                "stage": job_metadata.get("stage"),
+                "name": job_metadata.get("name"),
+                "ref": job_metadata.get("ref"),
+                "started_at": job_metadata.get("started_at"),
+                "finished_at": job_metadata.get("finished_at"),
+                "duration": job_metadata.get("duration"),
+            },
+            "error_stats": {
+                "error_count": analysis.get("error_count", 0),
+                "warning_count": analysis.get("warning_count", 0),
+                "exit_code": analysis.get("exit_code"),
+                "log_length": analysis.get("log_length", 0)
+            },
             "error_samples": analysis.get("errors", []),
-            
-            # Flag for log availability
-            "raw_logs_available": "raw_logs" in data
+            "warning_samples": analysis.get("warnings", []),
+            "identified_issues": analysis.get("identified_issues", []),
+            "root_causes": analysis.get("root_causes", []),
+            "suggestions": analysis.get("suggestions", []),
+            "contextual_analysis": analysis.get("contextual_analysis", {}),
+            "raw_logs": raw_logs  # Include raw logs for the agent to analyze
         }
     except Exception as e:
         logger.error(f"Error in debug_gitlab_job: {str(e)}")
@@ -599,4 +588,4 @@ def debug_gitlab_job(job_url: str, access_token: Optional[str] = None) -> dict:
             "status": "error",
             "error_message": f"Exception: {str(e)}"
         }
-    
+        

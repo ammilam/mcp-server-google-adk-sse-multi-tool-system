@@ -217,27 +217,113 @@ function analyzeGitLabJobLogs(logs: string): any {
   const warningLines: string[] = [];
   const infoLines: string[] = [];
   
+  // Extract job context and key information
+  const jobContext = {
+    jobStartTime: '',
+    jobEndTime: '',
+    ciJobName: '',
+    gitRef: '',
+    gitSha: '',
+    executionTime: 0,
+    environment: '',
+    runners: new Set<string>(),
+    stages: [] as string[],
+    currentStage: '',
+    failureContext: {} as any,
+  };
+  
+  // Extract important patterns
+  const timePattern = /(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d+Z|\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/;
+  const ciJobNamePattern = /Running with gitlab-(runner|ci) [^,]*\s+on\s+([^\s]+)/;
+  const gitRefPattern = /Checking out ([0-9a-f]+) as ([^\.]+)/i;
+  const stagePattern = /section_start:[0-9:]+:([a-z_]+)/;
+  
+  // First pass through the logs to gather job context
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    
+    // Extract job start time from first timestamp
+    if (!jobContext.jobStartTime) {
+      const timeMatch = line.match(timePattern);
+      if (timeMatch) {
+        jobContext.jobStartTime = timeMatch[1];
+      }
+    }
+    
+    // Extract CI job name and runner
+    const ciJobMatch = line.match(ciJobNamePattern);
+    if (ciJobMatch) {
+      jobContext.runners.add(ciJobMatch[2]);
+    }
+    
+    // Extract git ref
+    const gitRefMatch = line.match(gitRefPattern);
+    if (gitRefMatch) {
+      jobContext.gitSha = gitRefMatch[1];
+      jobContext.gitRef = gitRefMatch[2];
+    }
+    
+    // Track pipeline stages
+    const stageMatch = line.match(stagePattern);
+    if (stageMatch) {
+      const stageName = stageMatch[1];
+      if (!jobContext.stages.includes(stageName)) {
+        jobContext.stages.push(stageName);
+      }
+      jobContext.currentStage = stageName;
+    }
+    
+    // Extract job environment hints
+    if (line.includes('docker') || line.includes('container')) {
+      if (!jobContext.environment.includes('docker')) jobContext.environment += ' docker';
+    }
+    if (line.includes('kubernetes') || line.includes('k8s')) {
+      if (!jobContext.environment.includes('kubernetes')) jobContext.environment += ' kubernetes';
+    }
+    if (line.includes('google cloud') || line.includes('gcloud')) {
+      if (!jobContext.environment.includes('gcp')) jobContext.environment += ' gcp';
+    }
+    
+    // Extract job end time from last timestamp
+    const timeMatch = line.match(timePattern);
+    if (timeMatch) {
+      jobContext.jobEndTime = timeMatch[1];
+    }
+  }
+  
+  jobContext.environment = jobContext.environment.trim();
+  
   // Advanced pattern matching for various technologies
   const patterns = {
+    // [Your existing patterns]
     docker: {
       errors: [
         { pattern: /image.*not\s*found/i, issue: "Docker image not found", solution: "Verify the image name and ensure it exists in your registry" },
         { pattern: /permission denied/i, issue: "Docker permission issue", solution: "Check if the runner has proper permissions to pull/push images" },
-        { pattern: /no space left on device/i, issue: "Disk space issue", solution: "Clean up unnecessary images or increase disk space on the runner" }
+        { pattern: /no space left on device/i, issue: "Disk space issue", solution: "Clean up unnecessary images or increase disk space on the runner" },
+        { pattern: /unauthorized|authentication required/i, issue: "Docker registry authentication failure", solution: "Check your registry credentials and ensure they are correctly configured in your CI/CD settings" },
+        { pattern: /network timeout/i, issue: "Docker network timeout", solution: "Check network connectivity between your runner and the registry" },
+        { pattern: /failed to compute cache key/i, issue: "Docker build cache issue", solution: "Try clearing the Docker build cache or fixing cache configuration" }
       ]
     },
     kubernetes: {
       errors: [
         { pattern: /error validating|validation failed/i, issue: "Kubernetes manifest validation failure", solution: "Check your YAML files for syntax errors or invalid configurations" },
         { pattern: /forbidden: [^\n]+cannot (\w+) resource/i, issue: "Kubernetes permission issue", solution: "Verify service account permissions and RBAC settings" },
-        { pattern: /admission webhook.*denied/i, issue: "Admission controller rejection", solution: "Review the webhook policy constraints and adjust your resources accordingly" }
+        { pattern: /admission webhook.*denied/i, issue: "Admission controller rejection", solution: "Review the webhook policy constraints and adjust your resources accordingly" },
+        { pattern: /CrashLoopBackOff/i, issue: "Pod crash loop", solution: "Check container logs for application errors causing restart loops" },
+        { pattern: /ImagePullBackOff/i, issue: "Failed to pull container image", solution: "Verify image name, tag and registry access" },
+        { pattern: /Unhealthy.*probe failed/i, issue: "Health check failure", solution: "Review your health check configuration and ensure your application is responding correctly" }
       ]
     },
     terraform: {
       errors: [
         { pattern: /error applying plan/i, issue: "Terraform apply failure", solution: "Review the specific resource errors and verify your configurations" },
         { pattern: /Error: configuring Terraform AWS Provider/i, issue: "AWS provider configuration issue", solution: "Check AWS credentials and region settings" },
-        { pattern: /Error: Error creating .* ResourceNotFoundException/i, issue: "Resource not found", solution: "Verify the specified resource exists or check permissions" }
+        { pattern: /Error: Error creating .* ResourceNotFoundException/i, issue: "Resource not found", solution: "Verify the specified resource exists or check permissions" },
+        { pattern: /Error: No valid credential sources found/i, issue: "Provider authentication failure", solution: "Verify your authentication configuration for the provider" },
+        { pattern: /Error: Error acquiring the state lock/i, issue: "State lock issue", solution: "Check if a previous Terraform operation is still running or manually release the state lock" },
+        { pattern: /Error: Module not installed/i, issue: "Missing module", solution: "Run terraform init to install required modules" }
       ]
     },
     gcp: {
@@ -245,28 +331,41 @@ function analyzeGitLabJobLogs(logs: string): any {
         { pattern: /gcloud: command not found/i, issue: "gcloud CLI not installed", solution: "Ensure gcloud CLI is installed in your CI environment" },
         { pattern: /ERROR: \(gcloud\.[\w\.]+\)/i, issue: "gcloud command error", solution: "Check gcloud command parameters and permissions" },
         { pattern: /forbidden: .* does not have .* permission/i, issue: "GCP permission issue", solution: "Verify service account has the required IAM roles" },
-        { pattern: /NOT_FOUND: The resource .* was not found/i, issue: "GCP resource not found", solution: "Check if the referenced resource exists or is accessible" }
+        { pattern: /NOT_FOUND: The resource .* was not found/i, issue: "GCP resource not found", solution: "Check if the referenced resource exists or is accessible" },
+        { pattern: /ALREADY_EXISTS: .*/i, issue: "Resource already exists", solution: "Handle existing resource or use unique names" },
+        { pattern: /FAILED_PRECONDITION: .*/i, issue: "Precondition failure", solution: "Ensure all prerequisites for the operation are met" },
+        { pattern: /QUOTA_EXCEEDED: .*/i, issue: "GCP quota exceeded", solution: "Request quota increase or optimize resource usage" }
       ]
     },
     npm: {
       errors: [
         { pattern: /npm ERR! code E404/i, issue: "NPM package not found", solution: "Verify package name and version in package.json" },
         { pattern: /npm ERR! code ENOENT/i, issue: "File or directory not found", solution: "Check file paths in your package.json scripts" },
-        { pattern: /npm ERR! code ELIFECYCLE/i, issue: "NPM script execution failure", solution: "Examine the specific script that failed in package.json" }
+        { pattern: /npm ERR! code ELIFECYCLE/i, issue: "NPM script execution failure", solution: "Examine the specific script that failed in package.json" },
+        { pattern: /npm ERR! .* failed to fetch/i, issue: "Network issue fetching package", solution: "Check network connectivity to npm registry" },
+        { pattern: /npm ERR! .* ETIMEDOUT/i, issue: "Connection timeout", solution: "Check network connectivity or try using a different registry" },
+        { pattern: /npm ERR! .* incompatible with this version/i, issue: "Dependency compatibility issue", solution: "Update your dependencies or use compatible versions" }
       ]
     },
     python: {
       errors: [
         { pattern: /ModuleNotFoundError: No module named/i, issue: "Python module not found", solution: "Ensure all dependencies are in requirements.txt and properly installed" },
         { pattern: /SyntaxError: /i, issue: "Python syntax error", solution: "Fix syntax errors in your Python code" },
-        { pattern: /ImportError: /i, issue: "Python import error", solution: "Check your import statements and ensure packages are installed" }
+        { pattern: /ImportError: /i, issue: "Python import error", solution: "Check your import statements and ensure packages are installed" },
+        { pattern: /AttributeError: /i, issue: "Python attribute error", solution: "Verify object attributes exist before accessing them" },
+        { pattern: /TypeError: /i, issue: "Python type error", solution: "Check type compatibility in your function calls and operations" },
+        { pattern: /IndexError: /i, issue: "Python index error", solution: "Ensure array indices are within bounds" },
+        { pattern: /KeyError: /i, issue: "Python key error", solution: "Verify dictionary keys exist before accessing them" }
       ]
     },
     java: {
       errors: [
         { pattern: /could not find or load main class/i, issue: "Java class not found", solution: "Verify classpath and package structure" },
         { pattern: /compilation failure/i, issue: "Java compilation error", solution: "Fix compile-time errors in your Java code" },
-        { pattern: /OutOfMemoryError/i, issue: "Java out of memory error", solution: "Increase memory allocation for the Java process or optimize memory usage" }
+        { pattern: /OutOfMemoryError/i, issue: "Java out of memory error", solution: "Increase memory allocation for the Java process or optimize memory usage" },
+        { pattern: /NoClassDefFoundError/i, issue: "Class definition not found", solution: "Check your classpath and ensure all dependencies are included" },
+        { pattern: /ClassNotFoundException/i, issue: "Class not found", solution: "Verify the class exists in your build path" },
+        { pattern: /UnsupportedClassVersionError/i, issue: "Unsupported Java version", solution: "Compile for a compatible Java version or update your JDK" }
       ]
     },
     general: {
@@ -275,54 +374,67 @@ function analyzeGitLabJobLogs(logs: string): any {
         { pattern: /connection timed out/i, issue: "Network timeout", solution: "Check network connectivity and endpoint availability" },
         { pattern: /authentication failed/i, issue: "Authentication error", solution: "Verify credentials and access tokens" },
         { pattern: /insufficient memory/i, issue: "Memory issue", solution: "Increase memory allocation for your job" },
-        { pattern: /quota exceeded/i, issue: "Resource quota exceeded", solution: "Optimize resource utilization or request quota increase" }
+        { pattern: /quota exceeded/i, issue: "Resource quota exceeded", solution: "Optimize resource utilization or request quota increase" },
+        { pattern: /permission denied/i, issue: "Permission issue", solution: "Check file or resource permissions" },
+        { pattern: /invalid argument/i, issue: "Invalid argument", solution: "Review command arguments for correctness" },
+        { pattern: /file not found/i, issue: "File not found", solution: "Verify file paths and existence" }
       ]
     }
   };
   
   // Storage for identified issues
-  const issues: Array<{category: string, issue: string, solution: string, line: string}> = [];
+  let issues: Array<{category: string, issue: string, solution: string, line: string, context?: string, lineNumber: number}> = [];
   const technologies = new Set<string>();
   
-  // Detect CI/CD stage
+  // Enhanced CI/CD stage detection with context
   const stagePatterns = [
-    { pattern: /building|build stage|build step|building image|docker build/i, stage: "build" },
-    { pattern: /testing|test stage|running tests|test step|test suite|test runner/i, stage: "test" },
-    { pattern: /deploying|deployment|deploy stage|releasing|promotion|promote to/i, stage: "deploy" },
-    { pattern: /linting|lint check|code quality|quality gate|sonar/i, stage: "lint" },
-    { pattern: /security scan|vulnerability|cve|snyk|owasp/i, stage: "security" },
-    { pattern: /terraform plan|terraform init|terraform apply|tf apply/i, stage: "infrastructure" },
+    { pattern: /building|build stage|build step|building image|docker build/i, stage: "build", context: "build" },
+    { pattern: /testing|test stage|running tests|test step|test suite|test runner/i, stage: "test", context: "test" },
+    { pattern: /deploying|deployment|deploy stage|releasing|promotion|promote to/i, stage: "deploy", context: "deployment" },
+    { pattern: /linting|lint check|code quality|quality gate|sonar/i, stage: "lint", context: "code quality" },
+    { pattern: /security scan|vulnerability|cve|snyk|owasp/i, stage: "security", context: "security" },
+    { pattern: /terraform plan|terraform init|terraform apply|tf apply/i, stage: "infrastructure", context: "infrastructure" },
   ];
   
   let detectedStage = "unknown";
+  let stageContext = "";
   
-  // Analyze logs
+  // Second pass: More detailed analysis with context
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const lowerLine = line.toLowerCase();
     
-    // Detect CI/CD stage
+    // Get context from surrounding lines
+    const prevLine = i > 0 ? lines[i-1] : "";
+    const nextLine = i < lines.length - 1 ? lines[i+1] : "";
+    const lineContext = `${prevLine}\n${line}\n${nextLine}`.trim();
+    
+    // Enhanced stage detection
     for (const stageDef of stagePatterns) {
       if (stageDef.pattern.test(lowerLine)) {
         detectedStage = stageDef.stage;
+        stageContext = stageDef.context;
       }
     }
     
-    // Detect technologies used
+    // Enhanced technology detection
     if (lowerLine.includes("docker")) technologies.add("docker");
     if (lowerLine.includes("kubectl") || lowerLine.includes("kubernetes") || lowerLine.includes(" k8s ")) technologies.add("kubernetes");
     if (lowerLine.includes("terraform") || lowerLine.includes(" tf ")) technologies.add("terraform");
     if (lowerLine.includes("gcloud") || lowerLine.includes("gsutil") || lowerLine.includes("google cloud")) technologies.add("gcp");
     if (lowerLine.includes("npm ")) technologies.add("npm");
+    if (lowerLine.includes("yarn ")) technologies.add("yarn");
     if (lowerLine.includes("python") || lowerLine.includes("pip ")) technologies.add("python");
     if (lowerLine.includes("gradle") || lowerLine.includes("mvn ") || lowerLine.includes("java ")) technologies.add("java");
+    if (lowerLine.includes("go ") || lowerLine.includes("golang")) technologies.add("golang");
+    if (lowerLine.includes("dotnet") || lowerLine.includes("csharp") || lowerLine.includes(".net")) technologies.add("dotnet");
     
-    // Identify errors and warnings
+    // Advanced error and warning identification with context
     if (lowerLine.includes("error") || lowerLine.includes("exception") || lowerLine.includes("failed") || 
         lowerLine.includes("fatal") || lowerLine.includes("panic")) {
       errorLines.push(line);
       
-      // Pattern matching against known issues
+      // Enhanced pattern matching against known issues with context
       for (const [category, categoryPatterns] of Object.entries(patterns)) {
         for (const errorPattern of categoryPatterns.errors) {
           if (errorPattern.pattern.test(line)) {
@@ -330,8 +442,21 @@ function analyzeGitLabJobLogs(logs: string): any {
               category,
               issue: errorPattern.issue,
               solution: errorPattern.solution,
-              line
+              line,
+              context: lineContext,
+              lineNumber: i
             });
+            
+            // Record failure context for final analysis
+            if (!jobContext.failureContext[category]) {
+              jobContext.failureContext[category] = [];
+            }
+            jobContext.failureContext[category].push({
+              issue: errorPattern.issue,
+              line,
+              lineNumber: i
+            });
+            
             break;
           }
         }
@@ -343,20 +468,314 @@ function analyzeGitLabJobLogs(logs: string): any {
     }
   }
   
-  // If no specific issues were identified but we have errors, add a general issue
+  // Post-processing: analyze issues and generate dynamic insights
+  const dynamicAnalysis = analyzeFinalJobContext(jobContext, issues, technologies, errorLines.length);
+  
+  // If no specific issues were identified but we have errors, add smart fallbacks
   if (issues.length === 0 && errorLines.length > 0) {
+    // Find the most relevant error line based on common error indicators
+    let bestErrorLine = errorLines[errorLines.length - 1]; // Default to last error
+    let bestErrorScore = 0;
+    
+    for (const errorLine of errorLines) {
+      let score = 0;
+      if (errorLine.toLowerCase().includes("error:")) score += 5;
+      if (errorLine.toLowerCase().includes("exception")) score += 4;
+      if (errorLine.toLowerCase().includes("failed")) score += 3;
+      if (errorLine.toLowerCase().includes("fatal")) score += 3;
+      if (errorLine.match(/exit code [1-9]/i)) score += 5;
+      
+      if (score > bestErrorScore) {
+        bestErrorScore = score;
+        bestErrorLine = errorLine;
+      }
+    }
+    
     issues.push({
       category: "general",
       issue: "Unclassified error detected",
       solution: "Review the error details and check your pipeline configuration",
-      line: errorLines[0]
+      line: bestErrorLine,
+      lineNumber: errorLines.indexOf(bestErrorLine)
     });
   }
   
-  // Generate targeted solutions based on the specific errors
+  // Generate targeted solutions based on the specific errors and context
+  const solutions = generateSmartSolutions(issues, technologies, dynamicAnalysis);
+  
+  // Prioritize issues by their position in the log and error severity
+  const prioritizedIssues = prioritizeIssues(issues);
+  
+  // Context-aware analysis with dynamic insights
+  const contextualInsights: {
+    failureStage: string;
+    stageContext: string;
+    technologiesDetected: string[];
+    potentialRootCauses: Array<{category: string, issue: string}>;
+    commonPitfalls: string[];
+    failurePatterns: string[];
+    recommendedActions: string[];
+  } = {
+    failureStage: detectedStage,
+    stageContext: stageContext,
+    technologiesDetected: Array.from(technologies),
+    potentialRootCauses: prioritizedIssues.slice(0, 3).map(issue => ({
+      category: issue.category,
+      issue: issue.issue
+    })),
+    commonPitfalls: [],
+    failurePatterns: dynamicAnalysis.failurePatterns,
+    recommendedActions: dynamicAnalysis.recommendedActions
+  };
+  
+  // Add technology-specific insights based on actual detected issues
+  if (technologies.has("gcp")) {
+    if (issues.some(i => i.category === "gcp" && i.issue.includes("permission"))) {
+      contextualInsights.commonPitfalls.push(
+        "GCP deployments often fail due to IAM permission issues - verify service account roles"
+      );
+    }
+    
+    if (issues.some(i => i.line.includes("API"))) {
+      contextualInsights.commonPitfalls.push(
+        "Ensure you've activated the required APIs in your GCP project"
+      );
+    }
+    
+    if (issues.some(i => i.line.includes("quota"))) {
+      contextualInsights.commonPitfalls.push(
+        "Check for quota limits that might be affecting your deployment"
+      );
+    }
+  }
+  
+  if (technologies.has("kubernetes")) {
+    if (issues.some(i => i.line.includes("quota") || i.line.includes("capacity"))) {
+      contextualInsights.commonPitfalls.push(
+        "Namespace restrictions or resource quotas could be limiting your deployment"
+      );
+    }
+    
+    if (issues.some(i => i.line.includes("version") || i.line.includes("schema"))) {
+      contextualInsights.commonPitfalls.push(
+        "Verify that your Kubernetes manifests are compatible with the cluster version"
+      );
+    }
+    
+    if (issues.some(i => i.line.includes("webhook") || i.line.includes("admission"))) {
+      contextualInsights.commonPitfalls.push(
+        "Custom admission controllers might be blocking certain configurations"
+      );
+    }
+  }
+  
+  // Add common pitfalls and recommendations based on actual failures
+  const additionalInsights = generateAdditionalInsights(issues, technologies, errorLines);
+  contextualInsights.commonPitfalls = [...contextualInsights.commonPitfalls, ...additionalInsights];
+  
+  return {
+    error_count: errorLines.length,
+    warning_count: warningLines.length,
+    info_count: infoLines.length,
+    errors: errorLines.slice(0, 10), // First 10 errors
+    warnings: warningLines.slice(0, 10), // First 10 warnings
+    root_causes: prioritizedIssues.slice(0, 3).map(issue => `${issue.category}: ${issue.issue}`),
+    identified_issues: prioritizedIssues.slice(0, 5),
+    suggestions: solutions,
+    job_status: errorLines.length > 0 ? 'Failed' : 'Successful',
+    contextual_analysis: contextualInsights,
+    job_metadata: {
+      start_time: jobContext.jobStartTime,
+      end_time: jobContext.jobEndTime,
+      git_ref: jobContext.gitRef,
+      git_sha: jobContext.gitSha,
+      runners: Array.from(jobContext.runners),
+      stages: jobContext.stages
+    },
+    dynamic_insights: dynamicAnalysis
+  };
+}
+
+// Helper function to prioritize issues based on multiple factors
+function prioritizeIssues(issues: Array<{category: string, issue: string, solution: string, line: string, context?: string, lineNumber: number}>) {
+  return [...issues].sort((a, b) => {
+    // First prioritize by line number (later errors are often more relevant)
+    if (a.lineNumber !== b.lineNumber) {
+      return b.lineNumber - a.lineNumber;
+    }
+    
+    // Then prioritize by issue category importance
+    const categoryPriority: Record<string, number> = {
+      "docker": 7,
+      "kubernetes": 8,
+      "terraform": 6,
+      "gcp": 9,
+      "npm": 5,
+      "python": 5,
+      "java": 5,
+      "general": 3
+    };
+    
+    const aPriority = categoryPriority[a.category] || 0;
+    const bPriority = categoryPriority[b.category] || 0;
+    
+    return bPriority - aPriority;
+  });
+}
+
+// Helper function to analyze job context and generate insights
+function analyzeFinalJobContext(
+  jobContext: any,
+  issues: Array<{category: string, issue: string, solution: string, line: string, context?: string, lineNumber: number}>,
+  technologies: Set<string>,
+  errorCount: number
+) {
+  const insights = {
+    failurePatterns: [] as string[],
+    errorClusters: [] as any[],
+    recommendedActions: [] as string[],
+  };
+  
+  // Analyze failure patterns
+  if (errorCount > 20) {
+    insights.failurePatterns.push("High error volume suggests systemic failure");
+  }
+  
+  // Look for clusters of errors
+  const errorCategories = issues.map(i => i.category);
+  const categoryCounts: Record<string, number> = {};
+  
+  errorCategories.forEach(cat => {
+    categoryCounts[cat] = (categoryCounts[cat] || 0) + 1;
+  });
+  
+  // Identify dominant category
+  let dominantCategory = '';
+  let maxCount = 0;
+  
+  Object.entries(categoryCounts).forEach(([category, count]) => {
+    if (count > maxCount) {
+      maxCount = count;
+      dominantCategory = category;
+    }
+  });
+  
+  if (dominantCategory && maxCount > 3) {
+    insights.failurePatterns.push(`Multiple ${dominantCategory} errors suggest a systemic ${dominantCategory}-related issue`);
+  }
+  
+  // Generate technology-specific recommendations
+  if (technologies.has("docker") && issues.some(i => i.category === "docker")) {
+    if (issues.some(i => i.issue.includes("image not found"))) {
+      insights.recommendedActions.push("Verify image names and registry paths in your Dockerfile and CI configuration");
+    }
+    if (issues.some(i => i.issue.includes("permission"))) {
+      insights.recommendedActions.push("Check Docker registry credentials and permissions in your CI/CD variables");
+    }
+  }
+  
+  if (technologies.has("kubernetes") && issues.some(i => i.category === "kubernetes")) {
+    if (issues.some(i => i.issue.includes("validation"))) {
+      insights.recommendedActions.push("Run kubectl validate on your manifests before applying them");
+    }
+    if (issues.some(i => i.issue.includes("permission"))) {
+      insights.recommendedActions.push("Review RBAC permissions for the service account used by your CI/CD pipeline");
+    }
+  }
+  
+  if (technologies.has("gcp") && issues.some(i => i.category === "gcp")) {
+    if (issues.some(i => i.issue.includes("permission"))) {
+      insights.recommendedActions.push("Check IAM roles for your service account and ensure it has the necessary permissions");
+    }
+    if (issues.some(i => i.issue.includes("not found"))) {
+      insights.recommendedActions.push("Verify GCP resource names and ensure they exist in the correct project and region");
+    }
+  }
+  
+  // Add general recommendations if needed
+  if (insights.recommendedActions.length === 0) {
+    insights.recommendedActions.push("Review the detailed error logs for more specific troubleshooting guidance");
+  }
+  
+  return insights;
+}
+
+// Helper function to generate additional insights
+function generateAdditionalInsights(
+  issues: Array<{category: string, issue: string, solution: string, line: string, context?: string, lineNumber: number}>,
+  technologies: Set<string>,
+  errorLines: string[]
+) {
+  const insights: string[] = [];
+  
+  // Look for specific patterns in issues and error lines
+  if (errorLines.some(line => line.includes("timeout") || line.includes("timed out"))) {
+    insights.push("Network or resource timeouts detected - check operation timeout settings or network connectivity");
+  }
+  
+  if (errorLines.some(line => line.toLowerCase().includes("memory") && (line.includes("out") || line.includes("insufficient")))) {
+    insights.push("Memory resource constraints detected - consider increasing memory limits for your job");
+  }
+  
+  if (errorLines.some(line => line.match(/exit code [^0]/i))) {
+    insights.push("Non-zero exit codes indicate command failures - check command syntax and error handling");
+  }
+  
+  if (issues.some(i => i.line.toLowerCase().includes("permission") || i.line.toLowerCase().includes("access denied"))) {
+    insights.push("Permission issues detected - verify access rights across all resources used in the pipeline");
+  }
+  
+  if (errorLines.some(line => line.toLowerCase().includes("version") && line.toLowerCase().includes("compatibility"))) {
+    insights.push("Version compatibility issues detected - check for conflicting dependency versions or API version mismatches");
+  }
+  
+  // Return unique insights
+  return [...new Set(insights)];
+}
+
+// Generate smart solutions based on the specific errors and context
+function generateSmartSolutions(
+  issues: Array<{category: string, issue: string, solution: string, line: string, context?: string, lineNumber: number}>,
+  technologies: Set<string>,
+  dynamicAnalysis: any
+): string[] {
+  // Start with basic solutions from issues
   const solutions = issues.map(issue => issue.solution);
-  if (solutions.length === 0 && errorLines.length > 0) {
-    // Generate fallback solutions if no specific ones were identified
+  
+  // Add context-aware solutions
+  if (issues.length > 0) {
+    const categories = new Set(issues.map(i => i.category));
+    
+    // Add category-specific dynamic solutions
+    if (categories.has("docker")) {
+      const dockerIssues = issues.filter(i => i.category === "docker");
+      if (dockerIssues.some(i => i.issue.includes("authentication") || i.issue.includes("unauthorized"))) {
+        solutions.push("Verify Docker registry credentials are correctly configured in CI/CD secrets");
+      }
+    }
+    
+    if (categories.has("kubernetes")) {
+      const k8sIssues = issues.filter(i => i.category === "kubernetes");
+      if (k8sIssues.some(i => i.issue.includes("validation"))) {
+        solutions.push("Use a Kubernetes linter or validator to check manifests before applying");
+      }
+    }
+    
+    if (categories.has("gcp")) {
+      const gcpIssues = issues.filter(i => i.category === "gcp");
+      if (gcpIssues.some(i => i.issue.includes("permission"))) {
+        solutions.push("Run 'gcloud projects get-iam-policy' to audit permissions for your service account");
+      }
+    }
+  }
+  
+  // Include recommendations from dynamic analysis
+  if (dynamicAnalysis && dynamicAnalysis.recommendedActions) {
+    solutions.push(...dynamicAnalysis.recommendedActions);
+  }
+  
+  // Check for fallback solutions based on technology
+  if (solutions.length === 0) {
     if (technologies.has("docker")) {
       solutions.push("Verify your Dockerfile syntax and build configuration");
     }
@@ -369,65 +788,16 @@ function analyzeGitLabJobLogs(logs: string): any {
     if (technologies.has("terraform")) {
       solutions.push("Validate your Terraform configuration and check for state issues");
     }
-    
-    // Add a general solution if nothing specific was suggested
-    if (solutions.length === 0) {
-      solutions.push("Review the full logs to understand the specific error context");
-      solutions.push("Check the job configuration in .gitlab-ci.yml for potential syntax or configuration issues");
-    }
   }
   
-  // Prioritize issues by their position in the log (later errors are often more relevant)
-  const prioritizedIssues = [...issues].sort((a, b) => {
-    const aIndex = lines.indexOf(a.line);
-    const bIndex = lines.indexOf(b.line);
-    return bIndex - aIndex;
-  });
-  
-  // Context-aware analysis
-   const contextualInsights: {
-    failureStage: string;
-    technologiesDetected: string[];
-    potentialRootCauses: Array<{category: string, issue: string}>;
-    commonPitfalls: string[];
-  } = {
-    failureStage: detectedStage,
-    technologiesDetected: Array.from(technologies),
-    potentialRootCauses: prioritizedIssues.slice(0, 3).map(issue => ({
-      category: issue.category,
-      issue: issue.issue
-    })),
-    commonPitfalls: []
-  };
-  
-  // Add technology-specific insights
-  if (technologies.has("gcp")) {
-    contextualInsights.commonPitfalls.push(
-      "GCP deployments often fail due to IAM permission issues - verify service account roles",
-      "Ensure you've activated the required APIs in your GCP project",
-      "Check for quota limits that might be affecting your deployment"
-    );
-  }
-  if (technologies.has("kubernetes")) {
-    contextualInsights.commonPitfalls.push(
-      "Namespace restrictions or resource quotas could be limiting your deployment",
-      "Verify that your Kubernetes manifests are compatible with the cluster version",
-      "Custom admission controllers might be blocking certain configurations"
-    );
+  // Add a general solution if none were generated
+  if (solutions.length === 0) {
+    solutions.push("Review the full logs to understand the specific error context");
+    solutions.push("Check the job configuration in .gitlab-ci.yml for potential syntax or configuration issues");
   }
   
-  return {
-    error_count: errorLines.length,
-    warning_count: warningLines.length,
-    info_count: infoLines.length,
-    errors: errorLines.slice(0, 10), // First 10 errors
-    warnings: warningLines.slice(0, 10), // First 10 warnings
-    root_causes: prioritizedIssues.slice(0, 3).map(issue => `${issue.category}: ${issue.issue}`),
-    identified_issues: prioritizedIssues.slice(0, 5),
-    suggestions: solutions,
-    job_status: errorLines.length > 0 ? 'Failed' : 'Successful',
-    contextual_analysis: contextualInsights
-  };
+  // Remove duplicates and return
+  return [...new Set(solutions)];
 }
 
 const debugGitlabJobTool = async (parameters: any, sessionId: string): Promise<{ success: boolean; data?: any; error?: string }> => {
@@ -451,21 +821,53 @@ const debugGitlabJobTool = async (parameters: any, sessionId: string): Promise<{
   }
 
   // Use the provided token OR get it from environment variables
-  // This allows tokens to be managed server-side
   let token = access_token || process.env.GITLAB_ACCESS_TOKEN;
 
   if (!token) {
     // Instead of failing, log a warning and continue with limited functionality
     console.warn("No GitLab access token provided or configured. Private repositories will be inaccessible.");
-    // Return error only for private repos, which we'll detect when we try to access them
   }
 
-  // Try to download the pipeline logs
-  const job_trace_url: string = job_url + '/trace';
+  // Parse GitLab URL to extract instance URL, project ID, and job ID
+  let gitlabHost, projectPath, jobId, projectId;
+  try {
+    // Parse URL to extract components
+    const url = new URL(job_url);
+    gitlabHost = `${url.protocol}//${url.hostname}`;
+    
+    // Match patterns like:
+    // - https://gitlab.example.com/group/project/-/jobs/123456
+    // - https://gitlab.example.com/group/subgroup/project/-/jobs/123456
+    // - https://gitlab.com/namespace/project/-/jobs/123456
+    const pathParts = url.pathname.split('/-/jobs/');
+    
+    if (pathParts.length !== 2) {
+      return { 
+        success: false, 
+        error: 'Invalid GitLab job URL format. Expected format: https://gitlab-instance.com/[group]/[project]/-/jobs/[job_id]' 
+      };
+    }
+    
+    projectPath = pathParts[0].replace(/^\//, ''); // Remove leading slash
+    jobId = pathParts[1].split('/')[0]; // Get job ID, ignoring anything after it
+    
+    // URL-encode the project path for the API
+    projectId = encodeURIComponent(projectPath);
+    
+  } catch (error: any) {
+    return {
+      success: false,
+      error: `Failed to parse job URL: ${error.message}`
+    };
+  }
+
+  // Construct the GitLab API URL for the job trace using the parsed host
+  const apiBaseUrl = `${gitlabHost}/api/v4`;
+  const traceApiUrl = `${apiBaseUrl}/projects/${projectId}/jobs/${jobId}/trace`;
+  
+  console.log(`Fetching GitLab job trace from API: ${traceApiUrl}`);
 
   try {
-    console.log(`Fetching GitLab job logs from: ${job_trace_url}`);
-    
     // Create headers object with or without authorization
     const headers: Record<string, string> = {
       'Content-Type': 'application/json'
@@ -473,21 +875,68 @@ const debugGitlabJobTool = async (parameters: any, sessionId: string): Promise<{
     
     // Only add Authorization header if we have a token
     if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
+      headers['PRIVATE-TOKEN'] = token;
     }
     
-    const response = await axios.get(job_trace_url, { headers });
+    // Fetch the job logs
+    const response = await axios.get(traceApiUrl, { headers });
+    
+    // Try to get job metadata if we have a project ID and job ID
+    const job_api_url = `${apiBaseUrl}/projects/${projectId}/jobs/${jobId}`;
+    let jobMetadata = null;
+    
+    if (token) {
+      try {
+        const metadataResponse = await axios.get(job_api_url, { headers });
+        if (metadataResponse.status === 200) {
+          jobMetadata = metadataResponse.data;
+        }
+      } catch (error: any) {
+        console.warn(`Couldn't fetch job metadata: ${error.message}`);
+      }
+    }
     
     if (response.status === 200) {
-      // Basic log analysis - this could be enhanced further
       const logs = response.data;
+      
+      // Enhanced analysis with timing
+      console.time('Job analysis');
       const analysisResult = analyzeGitLabJobLogs(logs);
+      console.timeEnd('Job analysis');
+      
+      // Add job metadata if available
+      if (jobMetadata) {
+        analysisResult.gitlab_job_metadata = {
+          name: jobMetadata.name,
+          stage: jobMetadata.stage,
+          status: jobMetadata.status,
+          started_at: jobMetadata.started_at,
+          finished_at: jobMetadata.finished_at,
+          duration: jobMetadata.duration,
+          ref: jobMetadata.ref,
+          commit_sha: jobMetadata.commit?.id,
+          runner: jobMetadata.runner ? {
+            id: jobMetadata.runner.id,
+            description: jobMetadata.runner.description
+          } : null,
+          pipeline: jobMetadata.pipeline ? {
+            id: jobMetadata.pipeline.id,
+            status: jobMetadata.pipeline.status,
+            ref: jobMetadata.pipeline.ref
+          } : null
+        };
+      }
       
       return {
         success: true,
         data: {
           raw_logs: logs,
-          analysis: analysisResult
+          analysis: analysisResult,
+          job_url: job_url,
+          gitlab_instance: gitlabHost,
+          project_path: projectPath,
+          project_id: projectId,
+          job_id: jobId
         }
       };
     } else {
@@ -503,7 +952,22 @@ const debugGitlabJobTool = async (parameters: any, sessionId: string): Promise<{
     if (error.response && error.response.status === 401) {
       return {
         success: false,
-        error: 'Authentication failed: The GitLab job requires authentication. Please configure GITLAB_ACCESS_TOKEN on the MCP server.'
+        error: `Authentication failed: The GitLab job at ${gitlabHost} requires authentication. Please provide a valid access token.`
+      };
+    }
+    
+    // Handle other common errors
+    if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+      return {
+        success: false,
+        error: `Network error: Could not connect to GitLab instance at ${gitlabHost}. Please check your network connectivity and the GitLab URL.`
+      };
+    }
+    
+    if (error.response && error.response.status === 404) {
+      return {
+        success: false,
+        error: `Job not found: The specified GitLab job (${jobId}) does not exist in project ${projectPath} or you don't have access to it.`
       };
     }
     

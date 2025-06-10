@@ -64,12 +64,16 @@ For example, you can ask me to:
 - "Generate a README for the repository"
 
 When you ask me about GitLab job failures, I can:
-- Fetch and analyze job logs using server-side authentication (no need to provide tokens)
-- Identify common error patterns
-- Suggest potential fixes for pipeline issues
-- Provide comprehensive analysis for infrastructure and cloud deployments
-- Show you the raw logs for detailed inspection
+- Analyze job trace logs from GitLab.com or any self-hosted GitLab instance
+- Identify failure patterns and root causes across various technologies
+- Provide tailored advice for infrastructure, cloud deployments, and application builds
+- Suggest specific solutions based on the actual errors in your logs
+- Explain why the job failed and how to fix it in detail
 
+For example, you can ask me:
+- "Debug this GitLab job: https://gitlab.com/group/project/-/jobs/123456"
+- "What's wrong with this pipeline job: https://gitlab.example.com/group/project/-/jobs/123456"
+- "Help me fix the failures in this self-hosted GitLab job: https://gitlab.internal.company.com/group/project/-/jobs/123456"
 """,
     tools=[
         # Tools remain the same
