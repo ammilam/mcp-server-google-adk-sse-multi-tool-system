@@ -34,6 +34,7 @@ This guide will help you set up and run the MCP server and Google ADK agent syst
    ```bash
    # run this from the root directory of the project to setup the MCP server and the Google ADK agent
    ./scripts/setup.sh
+   gcloud auth application-default login
    ```
 
 2. **Configure environment variables**:
