@@ -10,6 +10,12 @@ import { createHash } from 'crypto';
 import { EventEmitter } from 'events';
 
 // Define types for our application
+type FileSearchOperation = {
+  operation: 'find';
+  repoPath: string;
+  filePattern: string;
+};
+
 type Session = {
   id: string;
   created: Date;
@@ -39,6 +45,29 @@ type RepoOperation = {
   repoPath?: string; // Renamed from 'path' to avoid conflict
   access_token?: string;
   options?: Record<string, any>;
+};
+
+// Add these new Git operation types to the existing types section
+type GitOperation = {
+  operation: 'create_branch' | 'checkout_branch' | 'commit' | 'push' | 'status' | 'pull';
+  repoPath: string;
+  branch?: string;
+  message?: string;
+  files?: string[];
+  remote?: string;
+  credentials?: {
+    username?: string;
+    password?: string;
+    token?: string;
+  };
+};
+
+type TerraformOperation = {
+  operation: 'init' | 'plan' | 'apply' | 'validate' | 'fmt' | 'output' | 'destroy';
+  workingDir: string;
+  options?: string[];
+  autoApprove?: boolean;
+  variables?: Record<string, string>;
 };
 
 // Create Express app
@@ -82,8 +111,17 @@ const getSessionAndUpdate = (sessionId: string): Session | null => {
 
 // Function to validate and normalize file paths
 const validatePath = (filePath: string): string => {
-  // Resolve path and prevent directory traversal
+  // Make paths relative to BASE_DIR to prevent confusion
   const normalizedPath = path.normalize(filePath).replace(/^(\.\.[\/\\])+/, '');
+
+  // If path starts with data/repos, handle it as a repository path 
+  // which should be resolved using the specific repoPathResolver
+  if (normalizedPath.startsWith('data/repos/') || normalizedPath.startsWith('data\\repos\\')) {
+    const repoPath = normalizedPath.replace(/^data[\/\\]repos[\/\\]/, '');
+    return path.resolve(process.env.REPO_DIR || './data/repos', repoPath);
+  }
+
+  // For other paths, add BASE_DIR prefix
   return path.resolve(process.env.BASE_DIR || './data', normalizedPath);
 };
 
@@ -118,21 +156,21 @@ async function handleDebugJobTool(parameters: any, sessionId: string): Promise<{
       error: 'Job URL is required for GitLab job debug operation'
     };
   }
-  
+
   console.log(`Processing GitLab job debug for URL: ${parameters.job_url}`);
-  
+
   // Create a copy of the parameters to avoid modifying the original
   const debugParams = { ...parameters };
-  
+
   // Always pass 'debug' as the operation parameter
   debugParams.operation = 'debug';
-  
+
   // Only pass access_token if it was explicitly provided
   // Otherwise, debugGitlabJobTool will use the server's token
   if (!debugParams.access_token) {
     delete debugParams.access_token;
   }
-  
+
   return await debugGitlabJobTool(debugParams, sessionId);
 }
 
@@ -210,13 +248,13 @@ const repoPathResolver = getRepositoryPathResolver();
 
 function analyzeGitLabJobLogs(logs: string): any {
   console.log("Starting comprehensive log analysis...");
-  
+
   // Parse logs into lines for analysis
   const lines = logs.split('\n');
   const errorLines: string[] = [];
   const warningLines: string[] = [];
   const infoLines: string[] = [];
-  
+
   // Extract job context and key information
   const jobContext = {
     jobStartTime: '',
@@ -231,17 +269,17 @@ function analyzeGitLabJobLogs(logs: string): any {
     currentStage: '',
     failureContext: {} as any,
   };
-  
+
   // Extract important patterns
   const timePattern = /(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d+Z|\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/;
   const ciJobNamePattern = /Running with gitlab-(runner|ci) [^,]*\s+on\s+([^\s]+)/;
   const gitRefPattern = /Checking out ([0-9a-f]+) as ([^\.]+)/i;
   const stagePattern = /section_start:[0-9:]+:([a-z_]+)/;
-  
+
   // First pass through the logs to gather job context
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    
+
     // Extract job start time from first timestamp
     if (!jobContext.jobStartTime) {
       const timeMatch = line.match(timePattern);
@@ -249,20 +287,20 @@ function analyzeGitLabJobLogs(logs: string): any {
         jobContext.jobStartTime = timeMatch[1];
       }
     }
-    
+
     // Extract CI job name and runner
     const ciJobMatch = line.match(ciJobNamePattern);
     if (ciJobMatch) {
       jobContext.runners.add(ciJobMatch[2]);
     }
-    
+
     // Extract git ref
     const gitRefMatch = line.match(gitRefPattern);
     if (gitRefMatch) {
       jobContext.gitSha = gitRefMatch[1];
       jobContext.gitRef = gitRefMatch[2];
     }
-    
+
     // Track pipeline stages
     const stageMatch = line.match(stagePattern);
     if (stageMatch) {
@@ -272,7 +310,7 @@ function analyzeGitLabJobLogs(logs: string): any {
       }
       jobContext.currentStage = stageName;
     }
-    
+
     // Extract job environment hints
     if (line.includes('docker') || line.includes('container')) {
       if (!jobContext.environment.includes('docker')) jobContext.environment += ' docker';
@@ -283,16 +321,16 @@ function analyzeGitLabJobLogs(logs: string): any {
     if (line.includes('google cloud') || line.includes('gcloud')) {
       if (!jobContext.environment.includes('gcp')) jobContext.environment += ' gcp';
     }
-    
+
     // Extract job end time from last timestamp
     const timeMatch = line.match(timePattern);
     if (timeMatch) {
       jobContext.jobEndTime = timeMatch[1];
     }
   }
-  
+
   jobContext.environment = jobContext.environment.trim();
-  
+
   // Advanced pattern matching for various technologies
   const patterns = {
     // [Your existing patterns]
@@ -381,11 +419,11 @@ function analyzeGitLabJobLogs(logs: string): any {
       ]
     }
   };
-  
+
   // Storage for identified issues
-  let issues: Array<{category: string, issue: string, solution: string, line: string, context?: string, lineNumber: number}> = [];
+  let issues: Array<{ category: string, issue: string, solution: string, line: string, context?: string, lineNumber: number }> = [];
   const technologies = new Set<string>();
-  
+
   // Enhanced CI/CD stage detection with context
   const stagePatterns = [
     { pattern: /building|build stage|build step|building image|docker build/i, stage: "build", context: "build" },
@@ -395,20 +433,20 @@ function analyzeGitLabJobLogs(logs: string): any {
     { pattern: /security scan|vulnerability|cve|snyk|owasp/i, stage: "security", context: "security" },
     { pattern: /terraform plan|terraform init|terraform apply|tf apply/i, stage: "infrastructure", context: "infrastructure" },
   ];
-  
+
   let detectedStage = "unknown";
   let stageContext = "";
-  
+
   // Second pass: More detailed analysis with context
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const lowerLine = line.toLowerCase();
-    
+
     // Get context from surrounding lines
-    const prevLine = i > 0 ? lines[i-1] : "";
-    const nextLine = i < lines.length - 1 ? lines[i+1] : "";
+    const prevLine = i > 0 ? lines[i - 1] : "";
+    const nextLine = i < lines.length - 1 ? lines[i + 1] : "";
     const lineContext = `${prevLine}\n${line}\n${nextLine}`.trim();
-    
+
     // Enhanced stage detection
     for (const stageDef of stagePatterns) {
       if (stageDef.pattern.test(lowerLine)) {
@@ -416,7 +454,7 @@ function analyzeGitLabJobLogs(logs: string): any {
         stageContext = stageDef.context;
       }
     }
-    
+
     // Enhanced technology detection
     if (lowerLine.includes("docker")) technologies.add("docker");
     if (lowerLine.includes("kubectl") || lowerLine.includes("kubernetes") || lowerLine.includes(" k8s ")) technologies.add("kubernetes");
@@ -428,12 +466,12 @@ function analyzeGitLabJobLogs(logs: string): any {
     if (lowerLine.includes("gradle") || lowerLine.includes("mvn ") || lowerLine.includes("java ")) technologies.add("java");
     if (lowerLine.includes("go ") || lowerLine.includes("golang")) technologies.add("golang");
     if (lowerLine.includes("dotnet") || lowerLine.includes("csharp") || lowerLine.includes(".net")) technologies.add("dotnet");
-    
+
     // Advanced error and warning identification with context
-    if (lowerLine.includes("error") || lowerLine.includes("exception") || lowerLine.includes("failed") || 
-        lowerLine.includes("fatal") || lowerLine.includes("panic")) {
+    if (lowerLine.includes("error") || lowerLine.includes("exception") || lowerLine.includes("failed") ||
+      lowerLine.includes("fatal") || lowerLine.includes("panic")) {
       errorLines.push(line);
-      
+
       // Enhanced pattern matching against known issues with context
       for (const [category, categoryPatterns] of Object.entries(patterns)) {
         for (const errorPattern of categoryPatterns.errors) {
@@ -446,7 +484,7 @@ function analyzeGitLabJobLogs(logs: string): any {
               context: lineContext,
               lineNumber: i
             });
-            
+
             // Record failure context for final analysis
             if (!jobContext.failureContext[category]) {
               jobContext.failureContext[category] = [];
@@ -456,7 +494,7 @@ function analyzeGitLabJobLogs(logs: string): any {
               line,
               lineNumber: i
             });
-            
+
             break;
           }
         }
@@ -467,16 +505,16 @@ function analyzeGitLabJobLogs(logs: string): any {
       infoLines.push(line);
     }
   }
-  
+
   // Post-processing: analyze issues and generate dynamic insights
   const dynamicAnalysis = analyzeFinalJobContext(jobContext, issues, technologies, errorLines.length);
-  
+
   // If no specific issues were identified but we have errors, add smart fallbacks
   if (issues.length === 0 && errorLines.length > 0) {
     // Find the most relevant error line based on common error indicators
     let bestErrorLine = errorLines[errorLines.length - 1]; // Default to last error
     let bestErrorScore = 0;
-    
+
     for (const errorLine of errorLines) {
       let score = 0;
       if (errorLine.toLowerCase().includes("error:")) score += 5;
@@ -484,13 +522,13 @@ function analyzeGitLabJobLogs(logs: string): any {
       if (errorLine.toLowerCase().includes("failed")) score += 3;
       if (errorLine.toLowerCase().includes("fatal")) score += 3;
       if (errorLine.match(/exit code [1-9]/i)) score += 5;
-      
+
       if (score > bestErrorScore) {
         bestErrorScore = score;
         bestErrorLine = errorLine;
       }
     }
-    
+
     issues.push({
       category: "general",
       issue: "Unclassified error detected",
@@ -499,19 +537,19 @@ function analyzeGitLabJobLogs(logs: string): any {
       lineNumber: errorLines.indexOf(bestErrorLine)
     });
   }
-  
+
   // Generate targeted solutions based on the specific errors and context
   const solutions = generateSmartSolutions(issues, technologies, dynamicAnalysis);
-  
+
   // Prioritize issues by their position in the log and error severity
   const prioritizedIssues = prioritizeIssues(issues);
-  
+
   // Context-aware analysis with dynamic insights
   const contextualInsights: {
     failureStage: string;
     stageContext: string;
     technologiesDetected: string[];
-    potentialRootCauses: Array<{category: string, issue: string}>;
+    potentialRootCauses: Array<{ category: string, issue: string }>;
     commonPitfalls: string[];
     failurePatterns: string[];
     recommendedActions: string[];
@@ -527,7 +565,7 @@ function analyzeGitLabJobLogs(logs: string): any {
     failurePatterns: dynamicAnalysis.failurePatterns,
     recommendedActions: dynamicAnalysis.recommendedActions
   };
-  
+
   // Add technology-specific insights based on actual detected issues
   if (technologies.has("gcp")) {
     if (issues.some(i => i.category === "gcp" && i.issue.includes("permission"))) {
@@ -535,44 +573,44 @@ function analyzeGitLabJobLogs(logs: string): any {
         "GCP deployments often fail due to IAM permission issues - verify service account roles"
       );
     }
-    
+
     if (issues.some(i => i.line.includes("API"))) {
       contextualInsights.commonPitfalls.push(
         "Ensure you've activated the required APIs in your GCP project"
       );
     }
-    
+
     if (issues.some(i => i.line.includes("quota"))) {
       contextualInsights.commonPitfalls.push(
         "Check for quota limits that might be affecting your deployment"
       );
     }
   }
-  
+
   if (technologies.has("kubernetes")) {
     if (issues.some(i => i.line.includes("quota") || i.line.includes("capacity"))) {
       contextualInsights.commonPitfalls.push(
         "Namespace restrictions or resource quotas could be limiting your deployment"
       );
     }
-    
+
     if (issues.some(i => i.line.includes("version") || i.line.includes("schema"))) {
       contextualInsights.commonPitfalls.push(
         "Verify that your Kubernetes manifests are compatible with the cluster version"
       );
     }
-    
+
     if (issues.some(i => i.line.includes("webhook") || i.line.includes("admission"))) {
       contextualInsights.commonPitfalls.push(
         "Custom admission controllers might be blocking certain configurations"
       );
     }
   }
-  
+
   // Add common pitfalls and recommendations based on actual failures
   const additionalInsights = generateAdditionalInsights(issues, technologies, errorLines);
   contextualInsights.commonPitfalls = [...contextualInsights.commonPitfalls, ...additionalInsights];
-  
+
   return {
     error_count: errorLines.length,
     warning_count: warningLines.length,
@@ -597,13 +635,13 @@ function analyzeGitLabJobLogs(logs: string): any {
 }
 
 // Helper function to prioritize issues based on multiple factors
-function prioritizeIssues(issues: Array<{category: string, issue: string, solution: string, line: string, context?: string, lineNumber: number}>) {
+function prioritizeIssues(issues: Array<{ category: string, issue: string, solution: string, line: string, context?: string, lineNumber: number }>) {
   return [...issues].sort((a, b) => {
     // First prioritize by line number (later errors are often more relevant)
     if (a.lineNumber !== b.lineNumber) {
       return b.lineNumber - a.lineNumber;
     }
-    
+
     // Then prioritize by issue category importance
     const categoryPriority: Record<string, number> = {
       "docker": 7,
@@ -615,10 +653,10 @@ function prioritizeIssues(issues: Array<{category: string, issue: string, soluti
       "java": 5,
       "general": 3
     };
-    
+
     const aPriority = categoryPriority[a.category] || 0;
     const bPriority = categoryPriority[b.category] || 0;
-    
+
     return bPriority - aPriority;
   });
 }
@@ -626,7 +664,7 @@ function prioritizeIssues(issues: Array<{category: string, issue: string, soluti
 // Helper function to analyze job context and generate insights
 function analyzeFinalJobContext(
   jobContext: any,
-  issues: Array<{category: string, issue: string, solution: string, line: string, context?: string, lineNumber: number}>,
+  issues: Array<{ category: string, issue: string, solution: string, line: string, context?: string, lineNumber: number }>,
   technologies: Set<string>,
   errorCount: number
 ) {
@@ -635,35 +673,35 @@ function analyzeFinalJobContext(
     errorClusters: [] as any[],
     recommendedActions: [] as string[],
   };
-  
+
   // Analyze failure patterns
   if (errorCount > 20) {
     insights.failurePatterns.push("High error volume suggests systemic failure");
   }
-  
+
   // Look for clusters of errors
   const errorCategories = issues.map(i => i.category);
   const categoryCounts: Record<string, number> = {};
-  
+
   errorCategories.forEach(cat => {
     categoryCounts[cat] = (categoryCounts[cat] || 0) + 1;
   });
-  
+
   // Identify dominant category
   let dominantCategory = '';
   let maxCount = 0;
-  
+
   Object.entries(categoryCounts).forEach(([category, count]) => {
     if (count > maxCount) {
       maxCount = count;
       dominantCategory = category;
     }
   });
-  
+
   if (dominantCategory && maxCount > 3) {
     insights.failurePatterns.push(`Multiple ${dominantCategory} errors suggest a systemic ${dominantCategory}-related issue`);
   }
-  
+
   // Generate technology-specific recommendations
   if (technologies.has("docker") && issues.some(i => i.category === "docker")) {
     if (issues.some(i => i.issue.includes("image not found"))) {
@@ -673,7 +711,7 @@ function analyzeFinalJobContext(
       insights.recommendedActions.push("Check Docker registry credentials and permissions in your CI/CD variables");
     }
   }
-  
+
   if (technologies.has("kubernetes") && issues.some(i => i.category === "kubernetes")) {
     if (issues.some(i => i.issue.includes("validation"))) {
       insights.recommendedActions.push("Run kubectl validate on your manifests before applying them");
@@ -682,7 +720,7 @@ function analyzeFinalJobContext(
       insights.recommendedActions.push("Review RBAC permissions for the service account used by your CI/CD pipeline");
     }
   }
-  
+
   if (technologies.has("gcp") && issues.some(i => i.category === "gcp")) {
     if (issues.some(i => i.issue.includes("permission"))) {
       insights.recommendedActions.push("Check IAM roles for your service account and ensure it has the necessary permissions");
@@ -691,61 +729,105 @@ function analyzeFinalJobContext(
       insights.recommendedActions.push("Verify GCP resource names and ensure they exist in the correct project and region");
     }
   }
-  
+
   // Add general recommendations if needed
   if (insights.recommendedActions.length === 0) {
     insights.recommendedActions.push("Review the detailed error logs for more specific troubleshooting guidance");
   }
-  
+
   return insights;
 }
 
 // Helper function to generate additional insights
 function generateAdditionalInsights(
-  issues: Array<{category: string, issue: string, solution: string, line: string, context?: string, lineNumber: number}>,
+  issues: Array<{ category: string, issue: string, solution: string, line: string, context?: string, lineNumber: number }>,
   technologies: Set<string>,
   errorLines: string[]
 ) {
   const insights: string[] = [];
-  
+
   // Look for specific patterns in issues and error lines
   if (errorLines.some(line => line.includes("timeout") || line.includes("timed out"))) {
     insights.push("Network or resource timeouts detected - check operation timeout settings or network connectivity");
   }
-  
+
   if (errorLines.some(line => line.toLowerCase().includes("memory") && (line.includes("out") || line.includes("insufficient")))) {
     insights.push("Memory resource constraints detected - consider increasing memory limits for your job");
   }
-  
+
   if (errorLines.some(line => line.match(/exit code [^0]/i))) {
     insights.push("Non-zero exit codes indicate command failures - check command syntax and error handling");
   }
-  
+
   if (issues.some(i => i.line.toLowerCase().includes("permission") || i.line.toLowerCase().includes("access denied"))) {
     insights.push("Permission issues detected - verify access rights across all resources used in the pipeline");
   }
-  
+
   if (errorLines.some(line => line.toLowerCase().includes("version") && line.toLowerCase().includes("compatibility"))) {
     insights.push("Version compatibility issues detected - check for conflicting dependency versions or API version mismatches");
   }
-  
+
   // Return unique insights
   return [...new Set(insights)];
 }
 
+async function findRelevantFiles(repoPath: string, filePattern: string): Promise<string[]> {
+  try {
+    const { execSync } = await import('child_process');
+    const command = `find "${repoPath}" -type f -name "${filePattern}" | grep -v "node_modules" | grep -v ".git"`;
+
+    try {
+      const result = execSync(command, { encoding: 'utf8' });
+      return result.split('\n').filter(Boolean);
+    } catch (error) {
+      // If find/grep fails, try a simpler approach with Node.js
+      return findFilesRecursively(repoPath, new RegExp(filePattern.replace(/\*/g, '.*')));
+    }
+  } catch (error) {
+    console.error(`Error finding relevant files:`, error);
+    return [];
+  }
+}
+
+async function findFilesRecursively(dir: string, pattern: RegExp): Promise<string[]> {
+  const foundFiles: string[] = [];
+
+  try {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+
+      if (entry.isDirectory()) {
+        if (entry.name !== 'node_modules' && entry.name !== '.git') {
+          const subFiles = await findFilesRecursively(fullPath, pattern);
+          foundFiles.push(...subFiles);
+        }
+      } else if (pattern.test(entry.name)) {
+        foundFiles.push(fullPath);
+      }
+    }
+  } catch (error) {
+    console.error(`Error reading directory ${dir}:`, error);
+  }
+
+  return foundFiles;
+}
+
+
 // Generate smart solutions based on the specific errors and context
 function generateSmartSolutions(
-  issues: Array<{category: string, issue: string, solution: string, line: string, context?: string, lineNumber: number}>,
+  issues: Array<{ category: string, issue: string, solution: string, line: string, context?: string, lineNumber: number }>,
   technologies: Set<string>,
   dynamicAnalysis: any
 ): string[] {
   // Start with basic solutions from issues
   const solutions = issues.map(issue => issue.solution);
-  
+
   // Add context-aware solutions
   if (issues.length > 0) {
     const categories = new Set(issues.map(i => i.category));
-    
+
     // Add category-specific dynamic solutions
     if (categories.has("docker")) {
       const dockerIssues = issues.filter(i => i.category === "docker");
@@ -753,14 +835,14 @@ function generateSmartSolutions(
         solutions.push("Verify Docker registry credentials are correctly configured in CI/CD secrets");
       }
     }
-    
+
     if (categories.has("kubernetes")) {
       const k8sIssues = issues.filter(i => i.category === "kubernetes");
       if (k8sIssues.some(i => i.issue.includes("validation"))) {
         solutions.push("Use a Kubernetes linter or validator to check manifests before applying");
       }
     }
-    
+
     if (categories.has("gcp")) {
       const gcpIssues = issues.filter(i => i.category === "gcp");
       if (gcpIssues.some(i => i.issue.includes("permission"))) {
@@ -768,12 +850,12 @@ function generateSmartSolutions(
       }
     }
   }
-  
+
   // Include recommendations from dynamic analysis
   if (dynamicAnalysis && dynamicAnalysis.recommendedActions) {
     solutions.push(...dynamicAnalysis.recommendedActions);
   }
-  
+
   // Check for fallback solutions based on technology
   if (solutions.length === 0) {
     if (technologies.has("docker")) {
@@ -789,13 +871,13 @@ function generateSmartSolutions(
       solutions.push("Validate your Terraform configuration and check for state issues");
     }
   }
-  
+
   // Add a general solution if none were generated
   if (solutions.length === 0) {
     solutions.push("Review the full logs to understand the specific error context");
     solutions.push("Check the job configuration in .gitlab-ci.yml for potential syntax or configuration issues");
   }
-  
+
   // Remove duplicates and return
   return [...new Set(solutions)];
 }
@@ -834,26 +916,26 @@ const debugGitlabJobTool = async (parameters: any, sessionId: string): Promise<{
     // Parse URL to extract components
     const url = new URL(job_url);
     gitlabHost = `${url.protocol}//${url.hostname}`;
-    
+
     // Match patterns like:
     // - https://gitlab.example.com/group/project/-/jobs/123456
     // - https://gitlab.example.com/group/subgroup/project/-/jobs/123456
     // - https://gitlab.com/namespace/project/-/jobs/123456
     const pathParts = url.pathname.split('/-/jobs/');
-    
+
     if (pathParts.length !== 2) {
-      return { 
-        success: false, 
-        error: 'Invalid GitLab job URL format. Expected format: https://gitlab-instance.com/[group]/[project]/-/jobs/[job_id]' 
+      return {
+        success: false,
+        error: 'Invalid GitLab job URL format. Expected format: https://gitlab-instance.com/[group]/[project]/-/jobs/[job_id]'
       };
     }
-    
+
     projectPath = pathParts[0].replace(/^\//, ''); // Remove leading slash
     jobId = pathParts[1].split('/')[0]; // Get job ID, ignoring anything after it
-    
+
     // URL-encode the project path for the API
     projectId = encodeURIComponent(projectPath);
-    
+
   } catch (error: any) {
     return {
       success: false,
@@ -864,7 +946,7 @@ const debugGitlabJobTool = async (parameters: any, sessionId: string): Promise<{
   // Construct the GitLab API URL for the job trace using the parsed host
   const apiBaseUrl = `${gitlabHost}/api/v4`;
   const traceApiUrl = `${apiBaseUrl}/projects/${projectId}/jobs/${jobId}/trace`;
-  
+
   console.log(`Fetching GitLab job trace from API: ${traceApiUrl}`);
 
   try {
@@ -872,19 +954,19 @@ const debugGitlabJobTool = async (parameters: any, sessionId: string): Promise<{
     const headers: Record<string, string> = {
       'Content-Type': 'application/json'
     };
-    
+
     // Only add Authorization header if we have a token
     if (token) {
       headers['PRIVATE-TOKEN'] = token;
     }
-    
+
     // Fetch the job logs
     const response = await axios.get(traceApiUrl, { headers });
-    
+
     // Try to get job metadata if we have a project ID and job ID
     const job_api_url = `${apiBaseUrl}/projects/${projectId}/jobs/${jobId}`;
     let jobMetadata = null;
-    
+
     if (token) {
       try {
         const metadataResponse = await axios.get(job_api_url, { headers });
@@ -895,15 +977,15 @@ const debugGitlabJobTool = async (parameters: any, sessionId: string): Promise<{
         console.warn(`Couldn't fetch job metadata: ${error.message}`);
       }
     }
-    
+
     if (response.status === 200) {
       const logs = response.data;
-      
+
       // Enhanced analysis with timing
       console.time('Job analysis');
       const analysisResult = analyzeGitLabJobLogs(logs);
       console.timeEnd('Job analysis');
-      
+
       // Add job metadata if available
       if (jobMetadata) {
         analysisResult.gitlab_job_metadata = {
@@ -926,7 +1008,7 @@ const debugGitlabJobTool = async (parameters: any, sessionId: string): Promise<{
           } : null
         };
       }
-      
+
       return {
         success: true,
         data: {
@@ -947,7 +1029,7 @@ const debugGitlabJobTool = async (parameters: any, sessionId: string): Promise<{
     }
   } catch (error: any) {
     console.error(`Error fetching GitLab job logs:`, error);
-    
+
     // Provide a more helpful message if it appears to be an authorization error
     if (error.response && error.response.status === 401) {
       return {
@@ -955,7 +1037,7 @@ const debugGitlabJobTool = async (parameters: any, sessionId: string): Promise<{
         error: `Authentication failed: The GitLab job at ${gitlabHost} requires authentication. Please provide a valid access token.`
       };
     }
-    
+
     // Handle other common errors
     if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
       return {
@@ -963,14 +1045,14 @@ const debugGitlabJobTool = async (parameters: any, sessionId: string): Promise<{
         error: `Network error: Could not connect to GitLab instance at ${gitlabHost}. Please check your network connectivity and the GitLab URL.`
       };
     }
-    
+
     if (error.response && error.response.status === 404) {
       return {
         success: false,
         error: `Job not found: The specified GitLab job (${jobId}) does not exist in project ${projectPath} or you don't have access to it.`
       };
     }
-    
+
     return {
       success: false,
       error: error.message || 'Unknown error fetching GitLab job logs'
@@ -1381,44 +1463,529 @@ Please check the repository for license information.
   }
 };
 
+async function handleGitTool(parameters: any, sessionId: string) {
+  if (!parameters.operation) {
+    return {
+      success: false,
+      error: 'Invalid Git operation request. Required parameter: operation'
+    };
+  }
+
+  console.log(`Processing Git operation: ${parameters.operation}`);
+
+  if (parameters.operation === 'find') {
+    if (!parameters.repoPath) {
+      return {
+        success: false,
+        error: 'Repository path is required for file search operations'
+      };
+    }
+
+    if (!parameters.filePattern) {
+      return {
+        success: false,
+        error: 'File pattern is required for file search operations'
+      };
+    }
+
+    const fileSearchOperation: FileSearchOperation = {
+      operation: 'find',
+      repoPath: parameters.repoPath,
+      filePattern: parameters.filePattern
+    };
+
+    return await gitTool(fileSearchOperation);
+  }
+
+  // Handle regular git operations
+  if (!parameters.repoPath) {
+    return {
+      success: false,
+      error: 'Repository path is required for Git operations'
+    };
+  }
+
+  const gitOperation: GitOperation = {
+    operation: parameters.operation,
+    repoPath: parameters.repoPath,
+    branch: parameters.branch,
+    message: parameters.message,
+    files: parameters.files,
+    remote: parameters.remote,
+    credentials: parameters.credentials
+  };
+
+  return await gitTool(gitOperation);
+}
+
+const gitTool = async (operation: GitOperation | FileSearchOperation): Promise<{ success: boolean; data?: any; error?: string }> => {
+  try {
+    try {
+      const { operation: op } = operation;
+
+      if ('repoPath' in operation && operation.repoPath) {
+        const repoPathValue = await repoPathResolver.resolveRepoPath(operation.repoPath);
+
+        // Verify this is within the expected repository directory
+        const baseDir = repoPathResolver.getBaseDir();
+        const resolvedBaseDir = path.resolve(baseDir);
+
+        if (!repoPathValue.startsWith(resolvedBaseDir)) {
+          return {
+            success: false,
+            error: `Invalid repository path: must be within the repositories directory`
+          };
+        }
+
+        // Verify the directory exists and is a git repository
+        try {
+          const gitDirPath = path.join(repoPathValue, '.git');
+          await fs.stat(gitDirPath);
+        } catch (err) {
+          return {
+            success: false,
+            error: `Repository not found or not a valid Git repository at: ${repoPathValue}`
+          };
+        }
+      }
+
+      if (op === 'find') {
+        const { repoPath, filePattern } = operation as FileSearchOperation;
+
+        if (!repoPath) {
+          return { success: false, error: 'Repository path is required for file search operations' };
+        }
+
+        // Use the repository path resolver to get the absolute path
+        const repoPathValue = await repoPathResolver.resolveRepoPath(repoPath);
+        console.log(`Searching for files matching '${filePattern}' in repository at ${repoPathValue}`);
+
+        const foundFiles = await findRelevantFiles(repoPathValue, filePattern);
+
+        return {
+          success: true,
+          data: {
+            matchingFiles: foundFiles,
+            count: foundFiles.length,
+            repoPath: repoPathValue
+          }
+        };
+      }
+
+      // Rest of the existing gitTool implementation
+      const { repoPath, branch, message, files, remote, credentials } = operation as GitOperation;
+
+      if (!repoPath) {
+        return { success: false, error: 'Repository path is required for Git operations' };
+      }
+
+      // Use the repository path resolver to get the absolute path
+      const repoPathValue = await repoPathResolver.resolveRepoPath(repoPath);
+      console.log(`Git operation ${op} on repository at ${repoPathValue}`);
+
+      // Import child_process for executing git commands
+      const { execSync } = await import('child_process');
+
+      // Execute git command in the repository directory
+      const execGitCommand = (command: string) => {
+        console.log(`Executing in ${repoPathValue}: ${command}`);
+        try {
+          const output = execSync(command, {
+            cwd: repoPathValue,
+            encoding: 'utf8',
+            stdio: ['pipe', 'pipe', 'pipe']
+          });
+          return { success: true, output };
+        } catch (error: any) {
+          console.error(`Git command failed: ${error.message}`);
+          return { success: false, error: error.message, stderr: error.stderr };
+        }
+      };
+
+      // Handle different git operations
+      switch (op) {
+        case 'create_branch': {
+          if (!branch) {
+            return { success: false, error: 'Branch name is required for create_branch operation' };
+          }
+
+          // Check if branch already exists
+          const branchCheck: any = execGitCommand(`git branch --list ${branch}`);
+          if (branchCheck.success && branchCheck.output.trim()) {
+            // Branch exists, check it out
+            console.log(`Branch ${branch} already exists, checking it out`);
+            const checkoutResult = execGitCommand(`git checkout ${branch}`);
+            return {
+              success: checkoutResult.success,
+              data: checkoutResult.success ? { branch, message: `Switched to existing branch ${branch}` } : undefined,
+              error: checkoutResult.success ? undefined : `Failed to checkout branch: ${checkoutResult.error}`
+            };
+          }
+
+          // Create and checkout the branch
+          const result = execGitCommand(`git checkout -b ${branch}`);
+          return {
+            success: result.success,
+            data: result.success ? { branch, message: `Created and switched to branch ${branch}` } : undefined,
+            error: result.success ? undefined : `Failed to create branch: ${result.error}`
+          };
+        }
+
+        case 'checkout_branch': {
+          if (!branch) {
+            return { success: false, error: 'Branch name is required for checkout_branch operation' };
+          }
+
+          // Checkout the branch
+          const result = execGitCommand(`git checkout ${branch}`);
+          return {
+            success: result.success,
+            data: result.success ? { branch, message: `Switched to branch ${branch}` } : undefined,
+            error: result.success ? undefined : `Failed to checkout branch: ${result.error}`
+          };
+        }
+
+        case 'commit': {
+          if (!message) {
+            return { success: false, error: 'Commit message is required for commit operation' };
+          }
+
+          // Add files to staging if specified, otherwise add all
+          const addCommand = files && files.length > 0
+            ? `git add ${files.join(' ')}`
+            : 'git add .';
+
+          const addResult = execGitCommand(addCommand);
+          if (!addResult.success) {
+            return {
+              success: false,
+              error: `Failed to add files: ${addResult.error}`
+            };
+          }
+
+          // Commit the changes
+          const commitResult = execGitCommand(`git commit -m "${message.replace(/"/g, '\\"')}"`);
+          return {
+            success: commitResult.success,
+            data: commitResult.success ? { message: commitResult.output } : undefined,
+            error: commitResult.success ? undefined : `Failed to commit: ${commitResult.error}`
+          };
+        }
+
+        case 'push': {
+          let pushCommand = 'git push';
+
+          if (branch) {
+            // Push specific branch
+            pushCommand += ` origin ${branch}`;
+          }
+
+          // If credentials are provided, construct a URL with credentials
+          if (credentials) {
+            let remoteUrl: string = '';
+
+            // Get current remote URL
+            const getRemoteResult: any = execGitCommand('git remote get-url origin');
+            if (getRemoteResult.success) {
+              remoteUrl = getRemoteResult.output.trim();
+
+              // Configure credentials for this push
+              if (credentials.token) {
+                // Handle GitHub vs GitLab token placement in URL
+                if (remoteUrl.includes('github.com')) {
+                  execGitCommand(`git remote set-url origin https://${credentials.token}@${remoteUrl.replace('https://', '')}`);
+                } else if (remoteUrl.includes('gitlab.com')) {
+                  execGitCommand(`git remote set-url origin https://oauth2:${credentials.token}@${remoteUrl.replace('https://', '')}`);
+                } else {
+                  execGitCommand(`git remote set-url origin https://${credentials.token}@${remoteUrl.replace('https://', '')}`);
+                }
+              } else if (credentials.username && credentials.password) {
+                execGitCommand(`git remote set-url origin https://${encodeURIComponent(credentials.username)}:${encodeURIComponent(credentials.password)}@${remoteUrl.replace('https://', '')}`);
+              }
+            }
+          }
+
+          // Push to remote
+          const pushResult = execGitCommand(pushCommand);
+
+          // If credentials were provided, reset the remote URL to remove credentials
+          if (credentials) {
+            const getRemoteResult: any = execGitCommand('git remote get-url origin');
+            if (getRemoteResult.success) {
+              const remoteUrl = getRemoteResult.output.trim();
+              if (remoteUrl.includes('@')) {
+                const cleanUrl = 'https://' + remoteUrl.split('@').pop();
+                execGitCommand(`git remote set-url origin ${cleanUrl}`);
+              }
+            }
+          }
+
+          return {
+            success: pushResult.success,
+            data: pushResult.success ? { message: pushResult.output } : undefined,
+            error: pushResult.success ? undefined : `Failed to push: ${pushResult.error}`
+          };
+        }
+
+        case 'status': {
+          // Get git status
+          const result = execGitCommand('git status');
+
+          // If successful, also get branch information
+          let branchInfo = {};
+          if (result.success) {
+            const branchResult: any = execGitCommand('git branch');
+            if (branchResult.success) {
+              const branches: string = branchResult.output
+                .split('\n')
+                .filter(Boolean)
+                .map((b: any) => ({
+                  name: b.replace('*', '').trim(),
+                  current: b.startsWith('*')
+                }));
+
+              branchInfo = { branches };
+            }
+          }
+
+          return {
+            success: result.success,
+            data: result.success ? {
+              status: result.output,
+              ...branchInfo
+            } : undefined,
+            error: result.success ? undefined : `Failed to get status: ${result.error}`
+          };
+        }
+
+        case 'pull': {
+          // Pull latest changes
+          const result = execGitCommand('git pull');
+          return {
+            success: result.success,
+            data: result.success ? { message: result.output } : undefined,
+            error: result.success ? undefined : `Failed to pull: ${result.error}`
+          };
+        }
+
+        default:
+          return { success: false, error: `Unsupported Git operation: ${op}` };
+      }
+    } catch (error: any) {
+      console.error(`Git tool error:`, error);
+      return {
+        success: false,
+        error: error.message || 'Unknown Git operation error'
+      };
+    }
+  } catch (error: any) {
+    console.error(`Git tool error:`, error);
+    return {
+      success: false,
+      error: error.message || 'Unknown Git operation error'
+    };
+  }
+};
+
+const terraformTool = async (operation: TerraformOperation): Promise<{ success: boolean; data?: any; error?: string, stderr?: string }> => {
+  try {
+    const { operation: op, workingDir, options = [], autoApprove = false, variables = {} } = operation;
+
+    if (!workingDir) {
+      return { success: false, error: 'Working directory is required for Terraform operations' };
+    }
+
+    // Use the repository path resolver to get the absolute path
+    const workDirPath = await repoPathResolver.resolveRepoPath(workingDir);
+    console.log(`Terraform operation ${op} in directory ${workDirPath}`);
+
+    // Check if terraform is installed
+    const { execSync } = await import('child_process');
+    try {
+      execSync('terraform --version', { encoding: 'utf8' });
+    } catch (error) {
+      return {
+        success: false,
+        error: 'Terraform not installed or not in PATH'
+      };
+    }
+
+    // Build the terraform command
+    let terraformCmd = `terraform ${op}`;
+
+    // Add options
+    if (options && options.length > 0) {
+      terraformCmd += ` ${options.join(' ')}`;
+    }
+
+    // Add auto-approve for apply and destroy
+    if ((op === 'apply' || op === 'destroy') && autoApprove) {
+      terraformCmd += ' -auto-approve';
+    }
+
+    if (op === 'fmt') {
+      terraformCmd += ' --recursive';
+    }
+
+    // Add variables if provided
+    const varParams = Object.entries(variables).map(([key, value]) => `-var="${key}=${value.replace(/"/g, '\\"')}"`).join(' ');
+    if (varParams) {
+      terraformCmd += ` ${varParams}`;
+    }
+
+    // Execute the terraform command
+    console.log(`Executing in ${workDirPath}: ${terraformCmd}`);
+    try {
+      const output = execSync(terraformCmd, {
+        cwd: workDirPath,
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+
+      return {
+        success: true,
+        data: {
+          operation: op,
+          output: output
+        }
+      };
+    } catch (error: any) {
+      console.error(`Terraform command failed:`, error);
+      return {
+        success: false,
+        error: error.message || 'Unknown error executing Terraform command',
+        stderr: error.stderr
+      };
+    }
+  } catch (error: any) {
+    console.error(`Terraform tool error:`, error);
+    return {
+      success: false,
+      error: error.message || 'Unknown Terraform operation error'
+    };
+  }
+};
+
+
+async function handleTerraformTool(parameters: any, sessionId: string) {
+  if (!parameters.operation) {
+    return {
+      success: false,
+      error: 'Invalid Terraform operation request. Required parameter: operation'
+    };
+  }
+
+  if (!parameters.workingDir) {
+    return {
+      success: false,
+      error: 'Working directory is required for Terraform operations'
+    };
+  }
+
+  console.log(`Processing Terraform operation: ${parameters.operation}`);
+
+  const terraformOperation: TerraformOperation = {
+    operation: parameters.operation,
+    workingDir: parameters.workingDir,
+    options: parameters.options,
+    autoApprove: parameters.autoApprove === true,
+    variables: parameters.variables || {}
+  };
+
+  return await terraformTool(terraformOperation);
+}
 
 // File system tool implementation that handles basic file operations
 const fileSystemTool = async (operation: FileOperation): Promise<{ success: boolean; data?: any; error?: string }> => {
   try {
     const safePath = validatePath(operation.path);
+    console.log(`Processing file system operation: ${operation.operation} on path: ${safePath}`);
 
     switch (operation.operation) {
       case 'read':
-        const content = await fs.readFile(safePath, operation.encoding || 'utf-8');
-        return { success: true, data: content };
+        const content = await fs.readFile(safePath, operation.encoding || 'utf8');
+        return {
+          success: true,
+          data: content
+        };
 
       case 'write':
-        if (!operation.content) {
-          return { success: false, error: 'No content provided for write operation' };
+        // Ensure directory exists before writing
+        const dirPath = path.dirname(safePath);
+        await fs.mkdir(dirPath, { recursive: true });
+
+        // Always write to a specific file, never overwrite directory
+        const fileExists = await fs.stat(safePath).catch(() => null);
+        if (fileExists && fileExists.isDirectory()) {
+          return {
+            success: false,
+            error: `Cannot write to ${safePath}: Path is a directory`
+          };
         }
 
-        // Ensure directory exists
-        const dir = path.dirname(safePath);
-        await fs.mkdir(dir, { recursive: true });
-
-        await fs.writeFile(safePath, operation.content, operation.encoding || 'utf-8');
-        return { success: true };
+        await fs.writeFile(safePath, operation.content || '', operation.encoding || 'utf8');
+        return {
+          success: true,
+          data: {
+            path: safePath,
+            bytesWritten: (operation.content || '').length
+          }
+        };
 
       case 'list':
-        const stats = await fs.stat(safePath);
-        if (stats.isFile()) {
-          return { success: true, data: [path.basename(safePath)] };
-        } else {
-          const files = await fs.readdir(safePath);
-          return { success: true, data: files };
-        }
+        const items = await fs.readdir(safePath);
+        const fileList = await Promise.all(
+          items.map(async (item) => {
+            const itemPath = path.join(safePath, item);
+            const stats = await fs.stat(itemPath);
+            return {
+              name: item,
+              path: path.relative(path.resolve(process.env.BASE_DIR || './data'), itemPath),
+              isDirectory: stats.isDirectory(),
+              size: stats.size,
+              modifiedTime: stats.mtime
+            };
+          })
+        );
+        return {
+          success: true,
+          data: fileList
+        };
 
       case 'delete':
-        await fs.unlink(safePath);
-        return { success: true };
+        const pathStat = await fs.stat(safePath).catch(() => null);
+        if (!pathStat) {
+          return {
+            success: false,
+            error: `Path not found: ${safePath}`
+          };
+        }
+
+        // For safety, only delete files by default, directories require explicit flag
+        if (pathStat.isDirectory()) {
+          // For repositories, we should be extra careful
+          if (safePath.includes('/repos/') || safePath.includes('\\repos\\')) {
+            return {
+              success: false,
+              error: `Cannot delete repository directory. Use explicit repository deletion command instead.`
+            };
+          }
+
+          // Use rmdir for directories
+          await fs.rmdir(safePath, { recursive: true });
+        } else {
+          // Use unlink for files
+          await fs.unlink(safePath);
+        }
+        return {
+          success: true
+        };
 
       default:
-        return { success: false, error: 'Unsupported file operation' };
+        return {
+          success: false,
+          error: `Unsupported operation: ${operation.operation}`
+        };
     }
   } catch (error: any) {
     console.error(`File system error:`, error);
@@ -1768,6 +2335,12 @@ app.post('/api/adk-webhook', express.json({ limit: '50mb' }), async (req: any, r
       case 'debug_gitlab_job':
         result = await handleDebugJobTool(parameters, mcpSessionId);
         break;
+      case 'git':
+        result = await handleGitTool(parameters, mcpSessionId);
+        break;
+      case 'terraform':
+        result = await handleTerraformTool(parameters, mcpSessionId);
+        break;
       // Add more cases here for additional tools
       default:
         result = {
@@ -1800,6 +2373,7 @@ app.post('/api/adk-webhook', express.json({ limit: '50mb' }), async (req: any, r
     });
   }
 });
+
 
 // Helper function to create a new session
 async function createNewSession() {

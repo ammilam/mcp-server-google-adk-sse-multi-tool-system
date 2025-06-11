@@ -2,6 +2,9 @@ from dotenv import load_dotenv
 from google.adk.agents import Agent
 import os
 import logging
+from google.adk.tools import agent_tool
+from google.adk.tools import google_search
+from google.adk.code_executors import BuiltInCodeExecutor
 
 from .mcp_toolkit import get_toolkit
 
@@ -25,8 +28,35 @@ from .tools import (
     mcp_analyze_repository,
     mcp_generate_readme,
     debug_gitlab_job,
+    mcp_git,
+    mcp_terraform,
+    mcp_terraform_fmt,
+    mcp_write_terraform_file,
+    mcp_create_feature_branch,
+    mcp_find_files,
+    mcp_ensure_file_path,
+    # Add the new function
+    mcp_terraform_add_resource
 )
-        
+
+search_agent = Agent(
+    model='gemini-2.0-flash',
+    name='SearchAgent',
+    instruction="""
+    You're a specialist in Google Search
+    """,
+    tools=[google_search],
+)
+
+coding_agent = Agent(
+    model='gemini-2.0-flash',
+    name='CodeAgent',
+    instruction="""
+    You're a specialist in Code Execution
+    """,
+code_executor=BuiltInCodeExecutor(),
+)
+    
 # Rename to root_agent for ADK compatibility
 root_agent = Agent(
     name="mcp_agent",
@@ -74,13 +104,40 @@ For example, you can ask me:
 - "Debug this GitLab job: https://gitlab.com/group/project/-/jobs/123456"
 - "What's wrong with this pipeline job: https://gitlab.example.com/group/project/-/jobs/123456"
 - "Help me fix the failures in this self-hosted GitLab job: https://gitlab.internal.company.com/group/project/-/jobs/123456"
+
+For repository operations:
+- I can clone repositories from GitHub or GitLab
+- I can analyze repositories and generate documentation
+- I can list all cloned repositories
+- I can create feature branches, make commits, and push changes
+- I can write and format Terraform code for infrastructure as code
+
+For Terraform operations:
+- I can create Terraform files with proper formatting in the appropriate directories
+- I can analyze existing Terraform code to understand your infrastructure
+- I can run terraform commands like init, plan, apply, validate, and terraform fmt --recursive
+- I can help create resources that reference existing infrastructure
+- I can suggest improvements to your infrastructure code
+- I can add new Terraform resources to existing repositories and commit the changes
+
+For example, you can ask me to:
+- "Find all Terraform files in my repository"
+- "Create a feature branch for adding a new BigQuery dataset"
+- "Write Terraform code for a GCP BigQuery dataset"
+- "Format the Terraform code in my repository"
+- "Commit my changes with a descriptive message"
+- "Push my feature branch to GitHub"
+- "Add a google_project resource to my repository and commit the changes"
 """,
     tools=[
-        # Tools remain the same
+        agent_tool.AgentTool(agent=search_agent),
+        agent_tool.AgentTool(agent=coding_agent),
         mcp_read_file,
         mcp_write_file,
         mcp_list_files,
         mcp_delete_file,
+        mcp_find_files,
+        mcp_ensure_file_path,
         
         # MCP API tools
         mcp_call_api,
@@ -99,7 +156,15 @@ For example, you can ask me:
         mcp_generate_readme,
 
         # debug gitlab tools
-        debug_gitlab_job
+        debug_gitlab_job,
+        
+        # IaC and Git tools
+        mcp_git,
+        mcp_terraform,
+        mcp_terraform_fmt,
+        mcp_write_terraform_file,
+        mcp_create_feature_branch,
+        mcp_terraform_add_resource,
     ]
 )
 

@@ -4,3 +4,4 @@ uvicorn[standard]
 python-dotenv
 requests
 sseclient-py
+python-dotenv>=1.0.0

@@ -25,9 +25,10 @@ ENV PORT 8000
 ENV GOOGLE_CLOUD_LOCATION "us-central1"
 ENV GOOGLE_GENAI_USE_VERTEXAI "True"
 ENV MCP_SERVER_URL http://localhost:9000
-
+COPY application_default_credentials.json /app
 # You can also set MCP_SERVER_URL here if it's fixed, or prefer to set it in deployment.yaml
 ENV MCP_SERVER_URL http://host.docker.internal:9000
+ENV GOOGLE_APPLICATION_CREDENTIALS /app/application_default_credentials.json
 
 # Create .dockerignore file if not exists to exclude sessions.db
 RUN echo "sessions.db" > .dockerignore

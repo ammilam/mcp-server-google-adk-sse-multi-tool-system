@@ -36,18 +36,32 @@ class MCPToolkit:
     def initialize_session(self) -> str:
         """Create a new session on the MCP server"""
         try:
-            response = requests.post(f"{self.mcp_server_url}/api/session")
-            if response.status_code == 200:
-                data = response.json()
-                self.session_id = data.get("sessionId")
-                logger.info(f"Session initialized with ID: {self.session_id}")
-                return self.session_id
-            else:
-                logger.error(f"Failed to initialize session: {response.text}")
-                raise Exception(f"Failed to initialize session: {response.status_code}")
+            # Try up to 3 times with exponential backoff
+            for attempt in range(3):
+                try:
+                    response = requests.post(f"{self.mcp_server_url}/api/session", timeout=10)
+                    if response.status_code == 200:
+                        data = response.json()
+                        self.session_id = data.get("sessionId")
+                        logger.info(f"Session initialized with ID: {self.session_id}")
+                        return self.session_id
+                    else:
+                        logger.error(f"Failed to initialize session (attempt {attempt+1}/3): {response.text}")
+                        time.sleep(2 ** attempt)  # Exponential backoff: 1, 2, 4 seconds
+                except requests.RequestException as e:
+                    logger.error(f"Connection error (attempt {attempt+1}/3): {str(e)}")
+                    time.sleep(2 ** attempt)
+                    
+            # Last fallback - create a local session ID if server is unreachable
+            self.session_id = str(uuid.uuid4())
+            logger.warning(f"Created local fallback session ID: {self.session_id}")
+            return self.session_id
         except Exception as e:
             logger.error(f"Error initializing session: {str(e)}")
-            raise
+            # Always ensure we have a session ID
+            self.session_id = str(uuid.uuid4())
+            logger.warning(f"Created emergency fallback session ID: {self.session_id}")
+            return self.session_id
     
     
     def reconnect_session(self, session_id: str) -> bool:
@@ -288,6 +302,24 @@ class MCPToolkit:
         return self.execute_tool("weather", {
             "location": location
         })
+
+    def git_operation(self, operation: str, repo_path: str, **kwargs) -> Dict:
+        """Execute git operations on a repository"""
+        params = {
+            "operation": operation,
+            "repoPath": repo_path,
+            **{k: v for k, v in kwargs.items() if v is not None}
+        }
+        return self.execute_tool("git", params)
+
+    def terraform_operation(self, operation: str, working_dir: str, **kwargs) -> Dict:
+        """Execute terraform operations"""
+        params = {
+            "operation": operation,
+            "workingDir": working_dir,
+            **{k: v for k, v in kwargs.items() if v is not None}
+        }
+        return self.execute_tool("terraform", params)
     
 
 # Singleton instance

@@ -1,188 +1,96 @@
-import logging
 import os
-from fastapi import FastAPI, HTTPException, Request, Depends, Response, Query
-from fastapi.responses import RedirectResponse, JSONResponse
-from google.adk.agents import Agent
-from google.adk.server import get_fast_api_app
+import logging
+from fastapi import FastAPI
 from dotenv import load_dotenv
-import secrets
-import json
 
 # Load environment variables
 load_dotenv()
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO, 
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger("mcp-agent-runner")
 
-
-# Use relative imports as this main.py is part of the mcp_agent package
-from .mcp_toolkit import get_toolkit
-# Initialize the toolkit
-toolkit = get_toolkit()
-
-# Import the agent after toolkit is potentially initialized
-from .agent import root_agent
-
-# Import OAuth utilities if environment variables are set
+# Initialize MCP toolkit early
 try:
-    from .oauth_utils import (
-        is_oauth_enabled,
-        create_oauth_flow,
-        exchange_code_for_token,
-        get_user_info,
-        get_oauth_client_config
-    )
-    oauth_available = is_oauth_enabled()
-    if oauth_available:
-        logger.info("OAuth support is enabled")
-    else:
-        logger.info("OAuth support is available but not enabled (missing environment variables)")
-except ImportError as e:
-    logger.warning(f"OAuth support is not available: {e}")
-    oauth_available = False
+    from mcp_agent.mcp_toolkit import get_toolkit
+    toolkit = get_toolkit()
+    logger.info(f"MCP toolkit initialized with session ID: {toolkit.session_id}")
+except Exception as e:
+    logger.error(f"Failed to initialize MCP toolkit: {e}")
+    toolkit = None
 
-# Get the directory where main.py is located
-AGENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # Go up one level
-# Example session DB URL (e.g., SQLite)
-SESSION_DB_URL = "sqlite:///./sessions.db"
-# Example allowed origins for CORS
-ALLOWED_ORIGINS = ["http://localhost", "http://localhost:8080", "*"]
-
-# Create FastAPI app using ADK's helper function
-app = get_fast_api_app(
-    agents_dir=AGENT_DIR,
-    session_db_url=SESSION_DB_URL,
-    allow_origins=ALLOWED_ORIGINS,
-    web=True,  # Enable web interface
-)
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint."""
-    return {
-        "status": "healthy", 
-        "session_id": toolkit.session_id,
-        "oauth_enabled": oauth_available
-    }
-
-# Add OAuth routes if enabled
-if oauth_available:
-    # Store the state for CSRF protection
-    oauth_states = {}
+# Try to import ADK components for web UI
+try:
+    # For Google ADK deployment
+    from google.adk.cli.fast_api import get_fast_api_app
+    has_adk_web = True
+    logger.info("Successfully imported ADK web interface components")
     
-    @app.get("/oauth/login")
-    async def oauth_login(request: Request):
-        """Initiate OAuth login flow."""
-        # Create a random state token for CSRF protection
-        state = secrets.token_urlsafe(32)
-        redirect_uri = str(request.url_for('oauth_callback'))
+    # Import the agent after toolkit initialization
+    try:
+        from mcp_agent import root_agent
+        has_agent = True
+        logger.info("Agent imported successfully")
+    except ImportError as e:
+        logger.warning(f"Could not import agent: {e}")
+        has_agent = False
         
-        # Create the OAuth flow
-        flow = create_oauth_flow(redirect_uri=redirect_uri)
-        if not flow:
-            raise HTTPException(status_code=500, detail="Failed to initialize OAuth flow")
-        
-        # Store state temporarily
-        oauth_states[state] = True
-        
-        # Generate the authorization URL
-        auth_url, _ = flow.authorization_url(
-            access_type='offline',
-            include_granted_scopes='true',
-            state=state
+except ImportError:
+    has_adk_web = False
+    logger.warning("Could not import ADK web interface components - falling back to basic API")
+
+# Create FastAPI app - try to use ADK's helper if available
+if has_adk_web:
+    try:
+        # AGENT_DIR should point to the directory containing the mcp_agent package
+        AGENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  
+        SESSION_DB_URL = os.environ.get("SESSION_DB_URL", "sqlite:///./sessions.db")
+        ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "http://localhost,http://localhost:8080,*").split(',')
+
+        # Call ADK's function to get the FastAPI app with web interface
+        app = get_fast_api_app(
+            agents_dir=AGENT_DIR,
+            session_db_url=SESSION_DB_URL,
+            allow_origins=ALLOWED_ORIGINS,
+            web=True
         )
-        
-        # Redirect the user to the authorization URL
-        return RedirectResponse(url=auth_url)
-    
-    @app.get("/oauth/callback")
-    async def oauth_callback(
-        request: Request,
-        state: str = Query(...),
-        code: str = Query(None),
-        error: str = Query(None)
-    ):
-        """Handle OAuth callback."""
-        # Verify state to prevent CSRF
-        if state not in oauth_states:
-            raise HTTPException(status_code=400, detail="Invalid state parameter")
-        
-        # Clean up the state
-        oauth_states.pop(state, None)
-        
-        # Check for errors
-        if error:
-            return JSONResponse(
-                status_code=400,
-                content={"error": error, "message": "Authentication failed"}
-            )
-        
-        # Exchange code for token
-        redirect_uri = str(request.url_for('oauth_callback'))
-        token_info = exchange_code_for_token(code, redirect_uri)
-        
-        if not token_info:
-            raise HTTPException(status_code=500, detail="Failed to exchange code for token")
-        
-        # Get user info
-        user_info = get_user_info(token_info['access_token'])
-        
-        # Store token with MCP toolkit
-        if user_info:
-            toolkit.set_session_data({
-                "oauth_user_info": user_info,
-                "oauth_email": user_info.get("email"),
-                "oauth_authenticated": True
-            })
-        
-        # Return success response or redirect to the agent UI
-        return RedirectResponse(url="/")
-    
-    @app.get("/oauth/status")
-    async def oauth_status():
-        """Check OAuth authentication status."""
-        try:
-            result = toolkit.get_session_data("oauth_authenticated")
-            is_authenticated = result.get("data", False) if result.get("success") else False
-            
-            if is_authenticated:
-                user_info_result = toolkit.get_session_data("oauth_user_info")
-                user_info = user_info_result.get("data", {}) if user_info_result.get("success") else {}
-                
-                return {
-                    "authenticated": True,
-                    "user": user_info
-                }
-            else:
-                return {"authenticated": False}
-        except Exception as e:
-            logger.error(f"Error checking OAuth status: {e}")
-            return {"authenticated": False, "error": str(e)}
-    
-    @app.get("/oauth/logout")
-    async def oauth_logout():
-        """Log out the OAuth user."""
-        try:
-            # Clear OAuth data from session
-            toolkit.set_session_data({
-                "oauth_user_info": None,
-                "oauth_email": None,
-                "oauth_authenticated": False
-            })
-            return {"success": True, "message": "Logged out successfully"}
-        except Exception as e:
-            logger.error(f"Error during logout: {e}")
-            return {"success": False, "error": str(e)}
+        logger.info("Using ADK's FastAPI app with web interface")
+    except Exception as e:
+        logger.error(f"Error setting up ADK's FastAPI app: {str(e)}")
+        # Fall back to basic FastAPI app
+        from fastapi import FastAPI
+        from fastapi.middleware.cors import CORSMiddleware
+        app = FastAPI(title="MCP Agent API")
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+        has_adk_web = False
+else:
+    # Create a basic FastAPI app for GKE deployment
+    from fastapi import FastAPI
+    from fastapi.middleware.cors import CORSMiddleware
+    app = FastAPI(title="MCP Agent API")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 # Add startup event to ensure MCP session is initialized
 @app.on_event("startup")
 async def startup_event():
     """Ensure MCP session is initialized on startup."""
     try:
+        from mcp_agent.mcp_toolkit import get_toolkit
         toolkit = get_toolkit()
         if toolkit.session_id:
             logger.info(f"MCP session initialized: {toolkit.session_id}")
@@ -191,7 +99,20 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Error initializing MCP session: {str(e)}")
 
+# Add health check endpoint
+@app.get("/health")
+async def health_check():
+    """Health check endpoint."""
+    from mcp_agent.mcp_toolkit import get_toolkit
+    toolkit = get_toolkit()
+    return {
+        "status": "healthy", 
+        "session_id": toolkit.session_id,
+        "deployment_type": "google-adk" if has_adk_web else "standalone",
+        "agent_available": has_agent
+    }
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", "8000"))
-    uvicorn.run("mcp_agent.main:app", host="0.0.0.0", port=port, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
