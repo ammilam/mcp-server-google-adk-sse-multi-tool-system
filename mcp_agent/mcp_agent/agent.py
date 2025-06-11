@@ -99,6 +99,7 @@ When you ask me about GitLab job failures, I can:
 - Provide tailored advice for infrastructure, cloud deployments, and application builds
 - Suggest specific solutions based on the actual errors in your logs
 - Explain why the job failed and how to fix it in detail
+- Clone down the repository and analyze the code to provide more context
 
 For example, you can ask me:
 - "Debug this GitLab job: https://gitlab.com/group/project/-/jobs/123456"

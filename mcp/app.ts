@@ -1823,9 +1823,9 @@ const terraformTool = async (operation: TerraformOperation): Promise<{ success: 
       terraformCmd += ' -auto-approve';
     }
 
-    if (op === 'fmt') {
-      terraformCmd += ' --recursive';
-    }
+    // if (op === 'fmt') {
+    //   terraformCmd += ' --recursive';
+    // }
 
     // Add variables if provided
     const varParams = Object.entries(variables).map(([key, value]) => `-var="${key}=${value.replace(/"/g, '\\"')}"`).join(' ');
