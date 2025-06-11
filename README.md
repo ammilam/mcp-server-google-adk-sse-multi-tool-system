@@ -38,7 +38,7 @@ This guide will help you set up and run the MCP server and Google ADK agent syst
    ```
 
 2. **Configure environment variables**:
-   - For MCP server, make sure .env contains:
+   - For MCP server, make sure .env in [mcp/](./mcp) contains:
      ```
      # Server Configuration
       PORT=9000
@@ -52,7 +52,7 @@ This guide will help you set up and run the MCP server and Google ADK agent syst
       REPO_DIR=./repos
       MAX_EVENT_LISTENERS=100
      ```
-   - For Google ADK agent, make sure .env contains:
+   - For Google ADK agent, make sure .env in [mcp_agent/](./mcp_agent/) contains:
      ```
      GOOGLE_CLOUD_PROJECT="your-google-project-id"
      GOOGLE_CLOUD_LOCATION="us-central1"
