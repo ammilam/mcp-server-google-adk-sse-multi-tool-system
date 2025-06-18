@@ -56,14 +56,30 @@ coding_agent = Agent(
     """,
 code_executor=BuiltInCodeExecutor(),
 )
+
+filesystem_agent = Agent(
+    model='gemini-2.0-flash',
+    name='FileSystemAgent',
+    instruction="""
+    You're a specialist in File System Operations
+    """,
+    tools=[
+        mcp_read_file,
+        mcp_write_file,
+        mcp_list_files,
+        mcp_delete_file,
+        mcp_find_files,
+        mcp_ensure_file_path,
+    ],
+)
     
 # Rename to root_agent for ADK compatibility
 root_agent = Agent(
     name="mcp_agent",
     model="gemini-2.0-flash",
     description="Agent that can handle weather, time, and interact with a Model Control Protocol server",
-    instruction="""I can help you with various tasks through my integration with the MCP server.
-I can:
+    instruction="""You can help with various tasks through your integration with an MCP server.
+You can do the following:
 - Get current time in different cities
 - Check weather conditions in locations
 - Read, write, list, and delete files
@@ -112,6 +128,7 @@ For repository operations:
 - I can list all cloned repositories
 - I can create feature branches, make commits, and push changes
 - I can write and format Terraform code for infrastructure as code
+- Use lowercase when styling commit messages, e.g., fix: fix variable misconfiguration
 
 For Terraform operations:
 - I can create Terraform files with proper formatting in the appropriate directories
