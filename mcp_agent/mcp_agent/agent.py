@@ -183,7 +183,7 @@ cloud_engineer_agent = Agent(
         mcp_list_files,
         mcp_delete_file,
         mcp_find_files,
-        mcp_ensure_file_path,
+        mcp_ensure_file_path
     ]
 )
     
@@ -192,9 +192,6 @@ root_agent = Agent(
     name="mcp_agent",
     model="gemini-2.5-flash",
     description="Agent that can handle weather, time, and interact with a Model Control Protocol server",
-    sub_agents=[
-        search_agent,
-    ]
     instruction="""You can help with various tasks through your integration with an MCP server.
 You can do the following:
 - Get current time in different cities
