@@ -178,6 +178,10 @@ cloud_engineer_agent = Agent(
         mcp_write_terraform_file,
         mcp_create_feature_branch,
         mcp_terraform_add_resource,
+        mcp_read_file,
+        mcp_write_file,
+        mcp_list_files,
+        mcp_delete_file,
         mcp_find_files,
         mcp_ensure_file_path,
     ]
@@ -188,6 +192,9 @@ root_agent = Agent(
     name="mcp_agent",
     model="gemini-2.5-flash",
     description="Agent that can handle weather, time, and interact with a Model Control Protocol server",
+    sub_agents=[
+        search_agent,
+    ]
     instruction="""You can help with various tasks through your integration with an MCP server.
 You can do the following:
 - Get current time in different cities
@@ -199,6 +206,8 @@ You can do the following:
 - Generate documentation for code repositories
 - Debug and analyze GitLab CI/CD job failures
 - Use agent tools for interacting with tools and the MCP server
+- Help with google cloud platform, CICD, Gitlab, and Terraform tasks
+- Search google for documentation on various topics
 
 When you ask me about files, I'll use the appropriate file operation tools.
 When you ask me about weather, I'll look up the latest conditions.
